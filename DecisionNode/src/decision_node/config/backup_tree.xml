@@ -1,0 +1,160 @@
+<root BTCPP_format="4">
+  <BehaviorTree ID="Main">
+    <ReactiveSequence name="MainLoop">
+      <Sequence name="UpdateBlackboard">
+        <UpdateRefereeBB />
+        <UpdateNavigationBB />
+        <UpdateVisionBB />
+        <UpdateTimersBB />
+        <UpdateDerivedFlags danger_hp="{danger_hp}" sufficient_bullet="{sufficient_bullet}" />
+      </Sequence>
+
+      <ReactiveFallback name="DecideAction">
+        <Sequence name="ToInitWhenNotInGame">
+          <IsGameStarted expect_started="false" />
+          <SetAction action="INIT" />
+        </Sequence>
+
+        <Sequence name="ToPushWhenGameStart">
+          <IsGameStarted expect_started="true" />
+          <IsAction value="INIT" />
+          <SetAction action="PUSH" />
+        </Sequence>
+
+        <Sequence name="ToRespawnWhenDead">
+          <IsSentryDead />
+          <SetAction action="RESPAWN" />
+        </Sequence>
+
+        <Sequence name="ToSupplyAfterRespawn">
+          <IsAction value="RESPAWN" />
+          <IsSentryAlive />
+          <SetAction action="SUPPLY" />
+        </Sequence>
+
+        <Sequence name="ToSupplyWhenInDanger">
+          <IsSentryInDanger />
+          <SetAction action="SUPPLY" />
+        </Sequence>
+
+
+        <Sequence name="ToPush">
+          <SetAction action="PUSH" />
+        </Sequence>
+
+        <Sequence name="ToWaitforOP">
+          <SetAction action="WAITFOROP" />
+        </Sequence>
+      </ReactiveFallback>
+
+      <ReactiveFallback name="ExecuteAction">
+        <Sequence>
+          <IsAction value="INIT" />
+          <SetMotionFlag target_motion="3" />
+          <PublishMotion />
+          <SetBulletUp value="0" />
+          <PublishBulletUp />
+          <SetRecover value="0" />
+          <PublishRecover />
+          <ClearGoal />
+        </Sequence>
+
+        <Sequence>
+          <IsAction value="PUSH" />
+          <SetMotionFlag target_motion="2" />
+          <PublishMotion />
+          <SetGoalFromParamsCyclic ns="occupy" point_count="4" />
+          <PublishGoalPoint topic="clicked_point" />
+          <Sequence>
+              <CheckArrived />
+              <SetAction action="OCCUPY"/>
+              <AlwaysSuccess />
+          </Sequence>
+        </Sequence>
+
+        <Sequence>
+          <IsAction value="OCCUPY" />
+          <Fallback>
+            <Sequence>
+              <CheckArrived />
+              <AdvanceCycleIndex point_count="4" /> 
+            </Sequence>
+            <AlwaysSuccess />
+          </Fallback>
+          <Fallback>
+            <Sequence>
+              <CheckAttacked />
+              <SetMotionFlag target_motion="1" />
+            </Sequence>
+            <SetMotionFlag target_motion="0" />
+          </Fallback>
+          <PublishMotion />
+          <SetGoalFromParamsCyclic ns="occupy" point_count="4" />
+          <PublishGoalPoint topic="clicked_point" />
+        </Sequence>
+
+        <Sequence>
+          <IsAction value="SUPPLY" />
+          <SetMotionFlag target_motion="2" />
+          <PublishMotion />
+          <SetGoalFromParams ns="supply" />
+          <PublishGoalPoint topic="clicked_point" />
+          <Fallback>
+            <Sequence>
+              <CheckArrived />
+              <SetRecover value="1" />
+              <PublishRecover />
+            </Sequence>
+            <AlwaysSuccess />
+          </Fallback>
+          <Fallback>
+            <Sequence>
+              <IsHealthFull />
+              <SetRecover value="0" />
+              <PublishRecover />
+            </Sequence>
+            <AlwaysSuccess />
+          </Fallback>
+          <Fallback>
+            <Sequence>
+              <CheckArrived />
+              <SetBulletUp value="1" />
+              <PublishBulletUp />
+              <SetBulletNum mode="DELTA" expected_bullet="{max_bullet}" fixed_supply="{fixed_supply}" />
+              <PublishBulletNum />
+            </Sequence>
+            <AlwaysSuccess />
+          </Fallback>
+          <Fallback>
+            <Sequence>
+              <IsBulletFull max_bullet="{max_bullet}" />
+              <SetBulletUp value="0" />
+              <SetBulletNum mode="FIXED" fixed_supply="0" />
+              <PublishBulletUp />
+              <PublishBulletNum />
+            </Sequence>
+            <AlwaysSuccess />
+          </Fallback>
+        </Sequence>
+
+        <Sequence>
+          <IsAction value="RESPAWN" />
+          <SetMotionFlag target_motion="3" />
+          <PublishMotion />
+        </Sequence>
+
+        <Sequence>
+          <IsAction value="WAITFOROP" />
+          <SetMotionFlag target_motion="0" />
+          <PublishMotion />
+          <SetBulletUp value="0" />
+          <PublishBulletUp />
+          <SetRecover value="0" />
+          <PublishRecover />
+          <SetGoalFromParams ns="waitforop" />
+          <PublishGoalPoint topic="clicked_point" />
+        </Sequence>
+      </ReactiveFallback>
+    </ReactiveSequence>
+  </BehaviorTree>
+</root>

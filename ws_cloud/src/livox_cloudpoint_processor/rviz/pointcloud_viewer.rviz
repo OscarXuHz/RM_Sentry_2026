@@ -1,0 +1,29 @@
+# RViz configuration file
+Visualization Manager:
+  Class: ""
+  Enabled: true
+  Name: "Visualization Manager"
+  Tools:
+    - Class: rviz/Interact
+      Hide Inactive Objects: true
+      Name: "Interact"
+    - Class: rviz/MoveCamera
+      Name: "Move Camera"
+    - Class: rviz/Select
+      Name: "Select"
+    - Class: rviz/FocusCamera
+      Name: "Focus Camera"
+  Displays:
+    - Class: rviz/PointCloud2
+      Enabled: true
+      Name: "3D Point Cloud"
+      Topic: "/test_scan"
+      Queue Size: 10
+    - Class: rviz/PointCloud2
+      Enabled: true
+      Name: "2D Point Cloud"
+      Topic: "/test_scan_2d"
+      Queue Size: 10
+  Global Options:
+    Background Color: [0, 0, 0]
+    Fixed Frame: "laser_frame"

@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- 手动输入发送数据+通讯 -->
+<launch>
+    <!-- 串口配置参数 -->
+    <arg name="communicator_port" default="/dev/ttyUSB0" 
+         doc="MCU通讯节点监听的串口设备"/>
+    <arg name="baudrate" default="115200" doc="串口波特率"/>
+    <arg name="nav_frequency" default="50" doc="NavigationFrame publishing frequency (Hz)"/>
+    <arg name="output" default="screen" doc="节点输出目标"/>
+    
+    <!-- MCU通讯节点 - 监听串口接收命令 -->
+    <node name="mcu_communicator" pkg="decision_node" type="mcu_communicator" output="$(arg output)">
+        <param name="serial_port" value="$(arg communicator_port)" />
+        <param name="baudrate" value="$(arg baudrate)" />
+        <param name="nav_frequency" value="$(arg nav_frequency)" />
+    </node>
+    
+    <!-- 命令测试节点 - 用于手动发送motion/recover/bullet_up/bullet_num/navigation命令 -->
+    <node name="command_test" pkg="decision_node" type="command_test" output="$(arg output)">
+        <!-- 交互式命令输入 - 通过ROS topics发布命令给mcu_communicator -->
+    </node>
+

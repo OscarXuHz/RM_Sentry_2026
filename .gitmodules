@@ -1,0 +1,3 @@
+[submodule "sentry_deps/Sophus"]
+	path = sentry_deps/Sophus
+	url = https://github.com/strasdat/Sophus.git

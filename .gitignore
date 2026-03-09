@@ -1,0 +1,34 @@
+# ROS catkin build artifacts — must be rebuilt on target machine
+build/
+devel/
+logs/
+install/
+
+# CMake artifacts
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+Makefile
+CTestCustom.cmake
+CTestTestfile.cmake
+CTestConfiguration.ini
+compile_commands.json
+*.stamp
+
+# Livox SDK build
+Livox-SDK2/build/
+
+# Python bytecode
+__pycache__/
+*.pyc
+*.pyo
+
+# IDE / OS artifacts
+.vscode/settings.json
+.DS_Store
+*.swp
+*.swo
+*~
+
+# ROS log files
+*.roslog

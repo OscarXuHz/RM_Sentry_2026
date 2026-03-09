@@ -1,0 +1,12 @@
+{
+    "python.autoComplete.extraPaths": [
+        "/home/sentry_train_test/AstarTraining/sim_nav/devel/lib/python3/dist-packages",
+        "/home/sentry_train_test/AstarTraining/ws_livox/devel/lib/python3/dist-packages",
+        "/opt/ros/noetic/lib/python3/dist-packages"
+    ],
+    "python.analysis.extraPaths": [
+        "/home/sentry_train_test/AstarTraining/sim_nav/devel/lib/python3/dist-packages",
+        "/home/sentry_train_test/AstarTraining/ws_livox/devel/lib/python3/dist-packages",
+        "/opt/ros/noetic/lib/python3/dist-packages"
+    ]
+}

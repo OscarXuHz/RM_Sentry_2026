@@ -1,0 +1,123 @@
+<launch>
+    <!-- Ensure HIT planning workspace is on ROS_PACKAGE_PATH -->
+    <env name="ROS_PACKAGE_PATH" value="/home/sentry_train_test/AstarTraining/DecisionNode/src:/home/sentry_train_test/AstarTraining/HIT_code/sentry_planning_ws/src:$(env ROS_PACKAGE_PATH)" />
+    <!-- DecisionNode devel space needed for mcu_communicator executable discovery -->
+    <env name="CMAKE_PREFIX_PATH" value="/home/sentry_train_test/AstarTraining/DecisionNode/devel:$(env CMAKE_PREFIX_PATH)" />
+    <!-- HIT integration args -->
+    <arg name="map_resolution" default="0.05" />
+    <arg name="robot_radius" default="0.35" />
+    <arg name="reference_desire_speed" default="2.8" />
+    <arg name="local_v_max" default="2.8" />
+    <arg name="points_topic" default="/filted_topic_3d" />
+    <arg name="enable_rviz" default="false" />
+    <arg name="enable_ser2msg" default="false" />
+    <arg name="enable_real_robot_transform" default="true" />
+    <arg name="enable_dstarlite" default="false" />
+    <arg name="serial_port" default="/dev/ttyUSB0" />
+    <arg name="serial_baudrate" default="115200" />
+    <arg name="enable_mcu_communicator" default="true" doc="Set false when MCU serial is not connected" />
+    <arg name="use_omega_output" default="false" doc="false=omni (vx/vy projected, z_angle=0), true=omega (vx+omega, vy=0)" />
+    <!-- 1. 地图服务（对齐 3DNavUL_Test.launch） -->
+    <include file="$(find bot_sim)/launch_real/map_server.launch" />
+
+    <!-- 2. IMU 滤波（无需改动） -->
+    <include file="$(find bot_sim)/launch_real/imu_filter.launch" />
+
+    <!-- 3. 激光驱动（无需改动） -->
+    <include file="$(find livox_ros_driver2)/launch_ROS1/msg_mixed.launch" />
+
+    <!-- 4. 定位（对齐 3DNavUL_Test.launch） -->
+    <include file="$(find hdl_localization)/launch/hdl_localization.launch">
+        <arg name="points_topic" value="$(arg points_topic)" />
+    </include>
+
+    <!-- 5. TF 变换（对齐 3DNavUL_Test.launch） -->
+    <include file="$(find bot_sim)/launch_real/real_robot_transform.launch" if="$(arg enable_real_robot_transform)" />
+
+    <!-- 6. 点云滤波（关键：输出 /grid 给 HIT） -->
+    <include file="$(find livox_cloudpoint_processor)/launch/lidar_filter_pointcloud.launch" />
+
+    <!-- 7. D* Lite（禁用，使用 HIT 规划与跟踪） -->
+    <include file="$(find bot_sim)/launch_real/dstarlite.launch" if="$(arg enable_dstarlite)" />
+
+    <!-- 8. 添加 HIT 全局规划 -->
+    <include file="$(find trajectory_generation)/launch/global_searcher.launch">
+        <arg name="map_resolution" value="$(arg map_resolution)"/>
+        <arg name="robot_radius" value="$(arg robot_radius)"/>
+        <arg name="reference_desire_speed" value="$(arg reference_desire_speed)"/>
+        <arg name="enable_rviz" value="$(arg enable_rviz)" />
+    </include>
+
+    <!-- 8.1 目标与里程计坐标系归一化（输出 /odom_local 与 /clicked_point） -->
+    <node pkg="bot_sim" type="local_frame_bridge.py" name="local_frame_bridge" output="screen">
+        <param name="odom_topic" value="/odom" />
+        <param name="odom_local_topic" value="/odom_local" />
+        <param name="goal_topic" value="/move_base_simple/goal" />
+        <param name="clicked_topic" value="/clicked_point" />
+        <param name="frame_id" value="map" />
+        <param name="aligned_in" value="/aligned_points" />
+        <param name="aligned_out" value="/aligned_points_local" />
+        <param name="filtered_in" value="/filted_topic_3d" />
+        <param name="filtered_out" value="/filted_topic_3d_local" />
+        <param name="center_on_first_odom" value="false" />
+        <param name="passthrough" value="true" />
+        <param name="map_size_x" value="10.0" />
+        <param name="map_size_y" value="10.0" />
+        <param name="map_lower_x" value="0.0" />
+        <param name="map_lower_y" value="0.0" />
+    </node>
+
+    <!-- 9. 添加 HIT 局部跟踪 -->
+    <include file="$(find tracking_node)/launch/trajectory_planning.launch">
+        <arg name="map_resolution" value="$(arg map_resolution)"/>
+        <arg name="robot_radius" value="$(arg robot_radius)"/>
+        <arg name="local_v_max" value="$(arg local_v_max)"/>
+        <arg name="use_omega_output" value="$(arg use_omega_output)"/>
+    </include>
+
+    <!-- 9.5 BEV map visualization in RViz -->
+    <node pkg="bot_sim" type="map_image_publisher.py" name="bev_image_publisher" output="log">
+        <param name="image_path" value="$(find trajectory_generation)/map/bevfinal.png" />
+        <param name="resolution" value="$(arg map_resolution)" />
+        <param name="origin_x" value="-3.405" />
+        <param name="origin_y" value="-5.838" />
+        <param name="frame_id" value="map" />
+        <param name="rate" value="1.0" />
+        <param name="invert" value="true" />
+    </node>
+
+    <!-- 9.6 OCC map visualization in RViz -->
+    <node pkg="bot_sim" type="map_image_publisher.py" name="occ_image_publisher" output="log">
+        <param name="image_path" value="$(find trajectory_generation)/map/occfinal.png" />
+        <param name="resolution" value="$(arg map_resolution)" />
+        <param name="origin_x" value="-3.405" />
+        <param name="origin_y" value="-5.838" />
+        <param name="frame_id" value="map" />
+        <param name="rate" value="1.0" />
+        <param name="invert" value="false" />
+    </node>
+
+    <!-- 10. HIT velocity bridge: slaver_speed → Twist → serial MCU (0x93 CRC8) -->
+    <!-- 10a. hit_bridge converts /sentry_des_speed (slaver_speed) into /cmd_vel (Twist)
+              and publishes arrival flag on /dstar_status (Bool) -->
+    <node pkg="tracking_node" type="hit_bridge" name="hit_bridge" output="screen">
+        <param name="cmd_vel_topic"  value="/cmd_vel" />
+        <param name="speed_topic"    value="/sentry_des_speed" />
+        <param name="arrived_topic"  value="/dstar_status" />
+        <param name="use_omega_output" value="$(arg use_omega_output)" />
+    </node>
+
+    <!-- 10b. mcu_communicator sends /cmd_vel (Twist) to MCU via serial (NavigationFrame 0x93)
+              Reads /dstar_status for arrived flag, /nav_received for received flag -->
+    <node pkg="decision_node" type="mcu_communicator" name="mcu_communicator" output="screen"
+          if="$(arg enable_mcu_communicator)">
+        <param name="serial_port" value="$(arg serial_port)" />
+        <param name="baudrate"    value="$(arg serial_baudrate)" />
+        <param name="nav_frequency" value="50.0" />
+    </node>
+
+    <!-- 10c. Legacy ser2msg kept behind flag for fallback (default OFF) -->
+    <include file="$(find bot_sim)/launch_real/ser2msg_tf_decision_givepoint.launch" if="$(arg enable_ser2msg)">
+        <param name="vel_topic" value="/sentry_des_speed" />
+    </include>
+</launch>

@@ -1,0 +1,45 @@
+<launch>
+  <!-- <param name="base_frame" type="string" value="gimbal_frame" />
+  <param name="base_frame1" type="string" value="gimbal_frame1" />
+  <param name="laser_frame" type="string" value="aft_mapped" />
+  <param name="scan_topic_left" type="string" value="/livox/lidar_192_168_1_3" />
+  <param name="scan_topic_right" type="string" value="/livox/lidar_192_168_1_105" />
+  <param name="new_scan_topic" type="string" value="/3Dlidar" />
+  <param name="new_scan_topic_2d" type="string" value="/test_scan_2d" />
+  <param name="first_RADIUS" type="double" value="0.35" />
+  <param name="second_RADIUS" type="double" value="0.35" />
+  <param name="start_height" type="double" value="0.1" />
+  <param name="max_height" type="double" value="0.3" />
+  <param name="slope_1" type="double" value="0.5" />
+  <param name="slope_2" type="double" value="0.1" />
+  <param name="slope_3" type="double" value="0.1" />
+  <param name="slp_first_RADIUS" type="double" value="0.55" />
+  <param name="slp_second_RADIUS" type="double" value="0.8" />
+  <param name="slp_third_RADIUS" type="double" value="0.9" />
+  <param name="dilation_radius" type="double" value="1" />
+  <param name="filted_topic_3d" type="string" value="/filted_topic_3d" />
+  <param name="dilated_topic_2d" type="string" value="/grid" /> -->
+
+  <node pkg="livox_cloudpoint_processor" type="livox_cloudpoint_processor" name="threeD_lidar_filter_pointcloud" output="screen">
+      <param name="base_frame" value="gimbal_frame" />
+      <param name="base_frame1" value="gimbal_frame1" />
+      <param name="laser_frame" value="aft_mapped" />
+      <param name="scan_topic_left" type="string" value="/livox/lidar_192_168_1_105" />
+      <param name="scan_topic_right" type="string" value="/livox/lidar_192_168_1_105" />
+      <param name="new_scan_topic_2d" value="/test_scan_2d" />
+      <param name="new_scan_topic" value="/3Dlidar" />
+      <param name="first_RADIUS" value="0.35" />
+      <param name="second_RADIUS" value="0.35" />
+      <param name="start_height" value="0.1" />
+      <param name="max_height" value="0.3" />
+      <param name="slope_1" value="0.5" />
+      <param name="slope_2" value="0.1" />
+      <param name="slope_3" value="0.1" />
+      <param name="slp_first_RADIUS" value="0.55" />
+      <param name="slp_second_RADIUS" value="0.8" />
+      <param name="slp_third_RADIUS" value="0.9" />
+      <param name="dilation_radius" type="double" value="1.2" />
+      <param name="filted_topic_3d" type="string" value="/filted_topic_3d" />
+      <param name="dilated_topic_2d" type="string" value="/grid" />
+  </node>
+</launch>
