@@ -1,0 +1,4 @@
+<launch>
+    <node name="node_watcher" pkg="bot_sim" type="node_watcher_ul.py" output="screen" >
+    </node>
+</launch>

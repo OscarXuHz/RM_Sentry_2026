@@ -1,0 +1,7 @@
+image: /home/sentry_train_test/AstarTraining/sim_nav/src/bot_sim/map/Jul28.map.pgm
+resolution: 0.050000
+origin: [-25.670156, -28.318207, 0.000000]
+negate: 0
+occupied_thresh: 0.65
+free_thresh: 0.196
+

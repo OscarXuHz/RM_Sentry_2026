@@ -1,0 +1,26 @@
+<launch>
+  <param name="use_sim_time" value="false"/>
+  <!-- <node pkg="bot_sim" type="lidar_filter" name="lidar_filter" output="screen">
+      <param name="subscribed_scan" type="string" value="scan_laser" />
+      <param name="new_scan" type="string" value="new_scan" />
+      <param name="min_angle" type="double" value="-1.2" />
+      <param name="max_angle" type="double" value="1.2" />
+  </node> -->
+  <node pkg="bot_sim" type="threeD_lidar_filter" name="threeD_lidar_filter" output="screen">
+      <param name="base_frame" type="string" value="gimbal_frame" />
+      <param name="laser_frame" type="string" value="aft_mapped" />
+      <param name="scan_topic_left" type="string" value="/livox/lidar_192_168_1_124" />
+      <param name="scan_topic_right" type="string" value="/livox/lidar_192_168_1_141" />
+      <param name="new_scan_topic" type="string" value="/test_scan" />
+      <param name="first_RADIUS" type="double" value="0.4" />
+      <param name="second_RADIUS" type="double" value="0.4" />
+      <param name="start_height" type="double" value="0.3" />
+      <param name="max_height" type="double" value="0.3" />
+      <param name="slope_1" type="double" value="0.1" />
+      <param name="slope_2" type="double" value="0.1" />
+      <param name="slope_3" type="double" value="0.1" />
+      <param name="slp_first_RADIUS" type="double" value="0.35" />
+      <param name="slp_second_RADIUS" type="double" value="0.01" />
+      <param name="slp_third_RADIUS" type="double" value="0.01" />
+  </node>
+</launch>

@@ -1,0 +1,22 @@
+#!/bin/bash
+source /home/sentry_train_test/AstarTraining/sim_nav/devel/setup.bash
+# sleep 120
+gnome-terminal -- bash -c "roslaunch decision decision.launch"
+sleep 10
+gnome-terminal -- bash -c "roslaunch bot_sim ser2msg_tf_write.launch"
+sleep 5
+gnome-terminal -- bash -c "roslaunch livox_ros_driver2 msg_mixed.launch"
+sleep 5
+gnome-terminal -- bash -c "roslaunch bot_sim lidar_filter.launch"
+sleep 5
+gnome-terminal -- bash -c "roslaunch bot_sim 3D22D.launch"
+sleep 5
+gnome-terminal -- bash -c "roslaunch bot_sim dbscan_bfs_3D.launch"
+sleep 5
+gnome-terminal -- bash -c "roslaunch point_lio mapping_avia.launch"
+sleep 5
+gnome-terminal -- bash -c "roslaunch bot_sim launch_amcl_real.launch"
+sleep 5
+gnome-terminal -- bash -c "roslaunch bot_sim navigate_real.launch"
+
+# gnome-terminal -- bash -c "roslaunch /home/sentry_train_test/AstarTraining/final.launch"

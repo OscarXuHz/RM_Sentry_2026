@@ -1,0 +1,7 @@
+<launch>
+  <!-- 启动 TEB 局部规划器 -->
+  <node pkg="move_base" type="move_base" name="move_base" output="screen">
+    <param name="base_local_planner" value="teb_local_planner/TebLocalPlannerROS"/>
+    <rosparam file="$(find bot_sim)/config/teb_local_planner_params.yaml"/>
+  </node>
+</launch>

@@ -1,0 +1,30 @@
+#!/bin/bash
+source /home/sentry_train_test/AstarTraining/sim_nav/devel/setup.bash
+gnome-terminal -- bash -c "roscore"
+sleep 5
+# sleep 140
+# gnome-terminal -- bash -c "roslaunch decision  decision.launch"
+# sleep 20
+# gnome-terminal -- bash -c "roslaunch bot_sim ser2msg_tf_write.launch"
+# sleep 5
+# gnome-terminal -- bash -c "roslaunch livox_ros_driver2 msg_mixed.launch"
+# sleep 5
+# gnome-terminal -- bash -c "roslaunch bot_sim lidar_filter.launch"
+# sleep 5
+# gnome-terminal -- bash -c "roslaunch bot_sim 3D22D.launch"
+# sleep 5
+# gnome-terminal -- bash -c "roslaunch bot_sim dbscan_bfs_3D.launch"
+# sleep 5
+# gnome-terminal -- bash -c "roslaunch point_lio mapping_avia.launch"
+# sleep 5
+# gnome-terminal -- bash -c "roslaunch bot_sim launch_amcl_real.launch"
+# sleep 5
+# gnome-terminal -- bash -c "roslaunch bot_sim navigate_real.launch"
+currentTime=$(date +"%Y-%m-%d %H:%M:%S")
+mkdir "/home/sentry_train_test/logfiles/$currentTime"
+mkdir "/home/sentry_train_test/recording/$currentTime"
+gnome-terminal -- bash -c "/home/sentry_train_test/AstarTraining/sim_nav/src/bot_sim/scripts/temp/node_watcher.py"
+#\ 1>/home/sentry_train_test/'$currentTime'/log_final.txt 2>/home/sentry_train_test/'$currentTime'/error_final.txt"
+# sleep 5
+# gnome-terminal -- bash -c "roslaunch decision decision.launch 1>/home/sentry_train_test/'$currentTime'/log_decision.txt 2>/home/sentry_train_test/'$currentTime'/error_decision.txt"
+gnome-terminal -- bash -c "rosbag record -a --split --duration=10s --chunksize=10 -O /home/sentry_train_test/recording/'$currentTime'/'$currentTime' 1>/home/sentry_train_test/logfiles/'$currentTime'/log_bag.txt 2>/home/sentry_train_test/logfiles/'$currentTime'/error_bag.txt"

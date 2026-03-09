@@ -1,0 +1,22 @@
+<launch>
+    <node pkg="bot_sim" type="dwa" name="dwa_optimizer" output="screen">
+        <param name="max_speed" value="3"/>
+        <param name="min_speed" value="-3"/>
+        <param name="max_yaw_rate" value="0.698"/>
+        <param name="max_accel" value="1"/>
+        <param name="max_dyaw_rate" value="0.698"/>
+        <param name="velocity_resolution" value="0.02"/>
+        <param name="yaw_rate_resolution" value="0.02"/>
+        <param name="dt" value="0.1"/>
+        <param name="predict_time" value="1.0"/>
+        <param name="heading_weight" value="0.5"/>
+        <param name="clearance_weight" value="1"/>
+        <param name="velocity_weight" value="1"/>
+        <param name="path_weight" value="0.5"/>
+        <param name="robot_frame" value="virtual_frame"/>
+        <param name="global_frame" value="map"/>
+        <!-- <param name="brake_distance" value="2"/> 刹车距离（米） -->
+        <param name="obstacle_check_radius" value="5"/> <!-- 检测半径 -->
+        <param name="safe_clearance" value="0.5"/> 
+    </node>
+</launch>

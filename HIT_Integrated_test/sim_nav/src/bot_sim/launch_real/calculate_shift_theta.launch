@@ -1,0 +1,10 @@
+<launch>
+    <!-- 启动节点 -->
+    <node name="calculate_shift_theta" pkg="bot_sim" type="calculate_shift_theta" output="screen" >
+        <!-- O1点为我方基地中心, O2点为地图中心(大符)-->
+        <param name="O1_x" type="double" value="8.15" />
+        <param name="O1_y" type="double" value="4.77" />
+        <param name="O2_x" type="double" value="8.13" />
+        <param name="O2_y" type="double" value="17.1" />
+    </node>
+</launch>

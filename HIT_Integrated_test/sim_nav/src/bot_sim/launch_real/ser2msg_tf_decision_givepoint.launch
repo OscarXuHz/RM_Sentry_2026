@@ -1,0 +1,22 @@
+<launch>
+    <param name="use_sim_time" value="false"/>
+    <node name="ser2msg_decision_givepoint" pkg="bot_sim" type="ser2msg_decision_givepoint">
+        <param name="serial_port" type="string" value="/dev/ttyUSB0" />
+        <param name="virtual_frame" type="string" value="virtual_frame" />
+        <param name="rotbase_frame" type="string" value="rotbase_frame" />
+        <param name="gimbal_frame" type="string" value="gimbal_frame" />
+        <param name="_3DLidar_frame" type="string" value="aft_mapped" />
+        <param name="delta_time" type="double" value="0.04" />
+        <param name="vel_topic" type="string" value="/sentry_des_speed" />
+        <param name="theta" type="double" value="1.572418" />
+        <param name="shift_x" type="double" value="15.652537" />
+        <param name="shift_y" type="double" value="3.212167" />
+    </node>
+<!--     
+    <node name="real_robot_transform" pkg="bot_sim" type="real_robot_transform" >
+        <param name="gimbal_frame" type="string" value="gimbal_frame" />
+        <param name="_3DLidar_frame" type="string" value="aft_mapped" />
+        <param name="g_frame" type="string" value="g_frame" />
+        <param name="v_frame" type="string" value="v_frame" />
+    </node> -->
+</launch>

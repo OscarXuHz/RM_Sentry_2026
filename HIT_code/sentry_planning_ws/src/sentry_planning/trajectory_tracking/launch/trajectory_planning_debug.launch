@@ -1,0 +1,7 @@
+<launch>
+
+<node pkg="trajectory_planning" name="trajectory_planning" type="trajectory_planning" output="screen" required = "true"  launch-prefix="xterm -e gdb -ex run --args " >
+    <rosparam file="$(find trajectory_planning)/cfg/trajectory_planning.yaml" command = "load" />
+</node>
+
+</launch>

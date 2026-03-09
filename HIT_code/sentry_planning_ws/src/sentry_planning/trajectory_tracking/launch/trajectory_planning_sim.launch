@@ -1,0 +1,49 @@
+<launch>
+
+<node pkg="tracking_node" name="tracking_node" type="tracking_node" output="screen" required = "true">
+    <param name="tracking_node/local_v_max" value="6.0"/>
+    <param name="tracking_node/local_a_max" value="6.0"/>
+    <param name="tracking_node/local_w_max" value="8.0"/>
+    <param name="tracking_node/local_j_max" value="8.0"/>
+    <param name="tracking_node/local_vxtl_max" value="1.8"/>
+    <param name="tracking_node/local_axtl_max" value="2.0"/>
+    <param name="tracking_node/local_wxtl_max" value="4.0"/>
+    <param name="tracking_node/local_jxtl_max" value="3.0"/>
+    <param name="tracking_node/rho_" value="1.0"/>
+    <param name="tracking_node/rhoN_" value="2.0"/>
+    <param name="tracking_node/planning_horizon" value="20"/>
+    <param name="tracking_node/dt" value="0.1"/>
+<!--         <param name="tracking_node/occ_file_path" type="string" value="/home/hitcrt/sentry_ws/src/sentry_planning/trajectory_generation/map/occfinal.png"/> -->
+<!--         <param name="tracking_node/bev_file_path" type="string" value="/home/hitcrt/sentry_ws/src/sentry_planning/trajectory_generation/map/bevfinal.png"/> -->
+<!--         <param name="tracking_node/distance_map_file_path" type="string" value="/home/hitcrt/sentry_ws/src/sentry_planning/trajectory_generation/map/occtopo.png"/> -->
+<!--         <param name="tracking_node/taskFile" type="string" value="/home/hitcrt/sentry_ws/src/sentry_planning/trajectory_tracking/cfg/task.info"/> -->
+    <param name="tracking_node/occ_file_path" type="string" value="$(find trajectory_generation)/map/occ2024low.png"/>
+    <param name="tracking_node/bev_file_path" type="string" value="$(find trajectory_generation)/map/bev2024low.png"/>
+    <param name="tracking_node/distance_map_file_path" type="string" value="$(find trajectory_generation)/map/occtopo2024low.png"/>
+    <param name="tracking_node/taskFile" type="string" value="$(find tracking_node)/cfg/task.info"/>
+    <param name="tracking_node/map_resolution" value="0.1"/>
+
+    <param name="tracking_node/map_lower_point_x" value="0.0"/>
+    <param name="tracking_node/map_lower_point_y" value="0.0"/>
+    <param name="tracking_node/map_lower_point_z" value="0.0"/>
+    <param name="tracking_node/map_x_size" value="30.0"/>
+    <param name="tracking_node/map_y_size" value="18.1"/>
+    <param name="tracking_node/map_z_size" value="2.0"/>
+    <param name="tracking_node/search_height_min" value="-0.3"/>
+    <param name="tracking_node/search_height_max" value="1.2"/>
+    <param name="tracking_node/search_radius" value="6.0"/>
+    <param name="tracking_node/robot_radius_dash" value="0.35"/>  <!--仿真环境设置为0.1，因为点云没有去畸变，实际0.2-->>
+    <param name="tracking_node/robot_radius" value="0.35"/>
+
+    <param name="tracking_node/height_bias" value="-0.5"/>  <!-- 地图高度偏置参数-->
+    <param name="tracking_node/height_interval" value="2.0"/> <!-- 地图高度间隔参数,高度地图所有像素的高度间隔-->
+    <param name="tracking_node/height_threshold" value="0.1"/> <!-- 地图高度阈值参数,障碍物点云高度检测阈值-->
+    <param name="tracking_node/height_sencond_high_threshold" value="0.3"/> <!-- 桥梁地图高度阈值参数,这个是顶部高度阈值-->
+
+
+
+
+
+</node>
+
+</launch>

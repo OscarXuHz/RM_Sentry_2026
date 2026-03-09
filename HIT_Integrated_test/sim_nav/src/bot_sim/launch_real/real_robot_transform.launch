@@ -1,0 +1,12 @@
+<launch>
+    <node name="real_robot_transform" pkg="bot_sim" type="real_robot_transform" >
+        <param name="gimbal_frame" type="string" value="gimbal_frame" />
+        <param name="_3DLidar_frame" type="string" value="aft_mapped" />
+        <param name="odom_frame" type="string" value="map" />
+        <param name="g_frame" type="string" value="temp_frame" />
+        <param name="v_frame" type="string" value="nothing_frame" />
+    </node>
+
+    <node pkg="tf2_ros" type="static_transform_publisher" name="base_link_publisher"
+          args="0 0 0 0 0 0 aft_mapped base_link" />
+</launch>

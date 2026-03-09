@@ -1,0 +1,3 @@
+# NOTE: $(find ...) does NOT work in YAML -- only in .launch XML
+# The map file paths (occ_file_path, bev_file_path, distance_map_file_path)
+# are set by <param> tags in global_searcher.launch, NOT here.

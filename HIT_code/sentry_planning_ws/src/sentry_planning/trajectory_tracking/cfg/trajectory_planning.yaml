@@ -1,0 +1,170 @@
+# map:
+#   # 地图分辨率
+#   resolution: 0.1
+#   # 地图三维尺寸
+#   x_size: 30
+#   y_size: 18
+#   z_size: 2.4
+
+# trajectory:
+#   # 障碍物点云的捕捉范围
+#   search_height_min: 0.4
+#   search_height_max: 1.0
+#   search_radius: 3
+#   # 轨迹规划的起始目标位置
+#   origin_target_x: 9.0
+#   origin_target_y: 4.0
+#   # 速度细分数目
+#   line_speed_division: 10
+#   angle_speed_division: 20
+#   # 角度细分
+#   steer_angle_division: 40
+#   # 速度空间
+#   line_speed_max: 2.0
+#   line_speed_min: 0.0
+#   angle_speed_max: 40
+#   angle_speed_min: -40
+#   # 角度空间
+#   steer_angle_max: 3.14
+#   steer_angle_min: -3.14
+#   # 障碍物安全距离
+#   obstacle_distance_threshold: 10.0
+#   # 速度评价函数权重
+#   heading_score_weight: 8.0
+#   distance_score_weight: 4.0
+#   velocity_score_weight: 1.0
+#   # 目标位置抵达半径
+#   target_point_arrive_radius: 0.2
+#   # 评估轨迹的时长
+#   planning_cycle_time: 0.02
+
+# mbot:
+#   # 左右轮轮距
+#   wheel_tread: 0.36
+#   # 碰撞检测半径
+#   crash_radius: 0.8
+
+# extreme:
+#   reference_v_max: 2.5
+#   reference_a_max: 2.2
+#   reference_w_max: 4.0
+#   Lfc: 0.5
+#   local_v_max: 2.5
+#   local_a_max: 25.0
+#   local_w_max: 8.0
+
+#   reference_vxtl_max: 1.5
+#   reference_axtl_max: 1.2
+#   reference_wxtl_max: 1.0
+#   local_vxtl_max: 1.0
+#   local_axtl_max: 8.0
+#   local_wxtl_max: 10.0
+
+#   reference_v_round: 1.0
+#   local_v_round: 1.0
+#   local_w_round: 12.0
+
+# debug:
+#   visual: true
+#   log: 1
+
+# kmf:
+#   speed_init_q: 0.0001
+#   speed_init_r: 0.001
+
+#   yaw_init_q: 0.2
+#   yaw_init_r: 0.001
+
+# game:
+#   red: true
+
+
+
+###########################################################simlutor################################################################
+map:
+  # 地图分辨率
+  resolution: 0.1
+  # 地图三维尺寸
+  x_size: 30
+  y_size: 18
+  z_size: 2.4
+
+trajectory:
+  # 障碍物点云的捕捉范围
+  search_height_min: 0.2
+  search_height_max: 1.0
+  search_radius: 4
+  # 轨迹规划的起始目标位置
+  origin_target_x: 9.0
+  origin_target_y: 4.0
+  # 速度细分数目
+  line_speed_division: 10
+  angle_speed_division: 20
+  # 角度细分
+  steer_angle_division: 40
+  # 速度空间
+  line_speed_max: 2.0
+  line_speed_min: 0.0
+  angle_speed_max: 40
+  angle_speed_min: -40
+  # 角度空间
+  steer_angle_max: 3.14
+  steer_angle_min: -3.14
+  # 障碍物安全距离
+  obstacle_distance_threshold: 10.0
+  # 速度评价函数权重
+  heading_score_weight: 8.0
+  distance_score_weight: 4.0
+  velocity_score_weight: 1.0
+  # 目标位置抵达半径
+  target_point_arrive_radius: 0.2
+  # 评估轨迹的时长
+  planning_cycle_time: 0.02
+
+mbot:
+  # 左右轮轮距
+  wheel_tread: 0.36
+  # 碰撞检测半径
+  crash_radius: 0.8
+
+extreme:
+  reference_v_max: 2.5
+  reference_a_max: 2.2
+  reference_w_max: 4.0
+  Lfc: 0.5
+  local_v_max: 2.5
+  local_a_max: 3.0
+  local_w_max: 2.0
+
+  reference_vxtl_max: 1.5
+  reference_axtl_max: 1.2
+  reference_wxtl_max: 1.0
+  local_vxtl_max: 1.0
+  local_axtl_max: 1.5
+  local_wxtl_max: 2.0
+
+  reference_v_round: 1.0
+  local_v_round: 1.0
+  local_w_round: 3.0
+
+debug:
+  visual: true
+  log: 1
+
+kmf:
+  speed_init_q: 0.0001
+  speed_init_r: 0.001
+
+  yaw_init_q: 0.2
+  yaw_init_r: 0.001
+
+game:
+  red: true
+
+tracking_node:
+  # NOTE: occ_file_path is set by <param> in trajectory_planning.launch
+  # Do NOT put $(find ...) here -- it becomes a literal string in YAML
+  robot_radius: 0.35
+  local_v_max: 2.8
+  local_vxtl_max: 1.8
+  planning_horizon: 20

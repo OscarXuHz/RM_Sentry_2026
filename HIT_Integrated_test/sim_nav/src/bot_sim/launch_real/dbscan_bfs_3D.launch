@@ -1,0 +1,12 @@
+<launch>
+    <param name="use_sim_time" value="false"/>
+    <node pkg="bot_sim" type="dbscan_bfs_3D" name="dbscan_bfs_3D">
+        <param name="epsilon" type="double" value="0.2" />
+        <param name="minPts" type="int" value="10" />
+        <param name="dfs_decrease" type="int" value="3" />
+        <param name="dfs_threshold" type="int" value="75" />
+        <param name="parent_frame" type="string" value="gimbal_frame" />
+        <param name="child_frame" type="string" value="gimbal_frame" />
+        <!-- <param name="child_frame" type="string" value="virtual_frame" /> -->
+    </node>
+</launch>
