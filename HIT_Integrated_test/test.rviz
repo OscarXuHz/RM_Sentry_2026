@@ -9,7 +9,9 @@ Panels:
         - /PointCloud21
         - /PointCloud22
         - /Marker1
+        - /Map1
         - /Map2
+        - /Path1
       Splitter Ratio: 0.5
     Tree Height: 549
   - Class: rviz/Selection
@@ -106,9 +108,9 @@ Visualization Manager:
       Queue Size: 10
       Selectable: true
       Size (Pixels): 3
-      Size (m): 0.009999999776482582
+      Size (m): 0.03999999910593033
       Style: Flat Squares
-      Topic: /3Dlidar
+      Topic: /filted_topic_3d
       Unreliable: false
       Use Fixed Frame: true
       Use rainbow: true
@@ -125,7 +127,7 @@ Visualization Manager:
       Color: 255; 255; 255
       Color Transformer: Intensity
       Decay Time: 0
-      Enabled: false
+      Enabled: true
       Invert Rainbow: true
       Max Color: 255; 255; 255
       Min Color: 0; 0; 0
@@ -140,26 +142,26 @@ Visualization Manager:
       Unreliable: false
       Use Fixed Frame: true
       Use rainbow: true
-      Value: false
+      Value: true
     - Class: rviz/Marker
       Enabled: true
       Marker Topic: /trajectory_generation/reference_path
       Name: Marker
       Namespaces:
-        {}
+        globaltrajectory: true
       Queue Size: 100
       Value: true
-    - Alpha: 0.699999988079071
+    - Alpha: 0.30000001192092896
       Class: rviz/Map
       Color Scheme: map
       Draw Behind: false
-      Enabled: false
+      Enabled: true
       Name: Map
-      Topic: /grid
+      Topic: /topo_image_publisher/grid
       Unreliable: false
       Use Timestamp: false
-      Value: false
-    - Alpha: 0.699999988079071
+      Value: true
+    - Alpha: 0.30000001192092896
       Class: rviz/Map
       Color Scheme: map
       Draw Behind: false
@@ -168,6 +170,46 @@ Visualization Manager:
       Topic: /occ_image_publisher/grid
       Unreliable: false
       Use Timestamp: false
+      Value: true
+    - Alpha: 1
+      Buffer Length: 15
+      Class: rviz/Path
+      Color: 25; 255; 0
+      Enabled: true
+      Head Diameter: 0.30000001192092896
+      Head Length: 0.20000000298023224
+      Length: 0.30000001192092896
+      Line Style: Lines
+      Line Width: 0.029999999329447746
+      Name: Path
+      Offset:
+        X: 0
+        Y: 0
+        Z: 0
+      Pose Color: 255; 85; 255
+      Pose Style: None
+      Queue Size: 15
+      Radius: 0.029999999329447746
+      Shaft Diameter: 0.10000000149011612
+      Shaft Length: 0.10000000149011612
+      Topic: /tracking/mpc_predicted_path
+      Unreliable: false
+      Value: true
+    - Class: rviz/Marker
+      Enabled: true
+      Marker Topic: /trajectory_generation/topo_point_guard
+      Name: Marker
+      Namespaces:
+        topopoint_guard: true
+      Queue Size: 100
+      Value: true
+    - Class: rviz/Marker
+      Enabled: true
+      Marker Topic: /trajectory_generation/topo_point_connection
+      Name: Marker
+      Namespaces:
+        topopoint_connect: true
+      Queue Size: 100
       Value: true
   Enabled: true
   Global Options:
@@ -197,7 +239,7 @@ Visualization Manager:
   Views:
     Current:
       Class: rviz/Orbit
-      Distance: 15.95350456237793
+      Distance: 10.735604286193848
       Enable Stereo Rendering:
         Stereo Eye Separation: 0.05999999865889549
         Stereo Focal Distance: 1
@@ -205,17 +247,17 @@ Visualization Manager:
         Value: false
       Field of View: 0.7853981852531433
       Focal Point:
-        X: 0.9320122003555298
-        Y: 0.18588539958000183
-        Z: 1.8644365072250366
+        X: -0.42140650749206543
+        Y: 0.3409220278263092
+        Z: 0.0007994174957275391
       Focal Shape Fixed Size: true
       Focal Shape Size: 0.05000000074505806
       Invert Z Axis: false
       Name: Current View
       Near Clip Distance: 0.009999999776482582
-      Pitch: 1.3997963666915894
+      Pitch: 1.1782974004745483
       Target Frame: <Fixed Frame>
-      Yaw: 0.6785799264907837
+      Yaw: 3.9859373569488525
     Saved: ~
 Window Geometry:
   Displays:

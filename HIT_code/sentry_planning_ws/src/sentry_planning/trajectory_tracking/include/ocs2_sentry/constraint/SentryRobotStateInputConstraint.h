@@ -24,9 +24,9 @@ class SentryStateInputConstraint final : public ocs2::StateInputConstraint {
 private:
     mutable ocs2::vector_t previous_input_;
     ocs2::scalar_t max_input_change_ = 8.0;
-    ocs2::scalar_t max_input_acceleration_ = 6.0;
-    ocs2::scalar_t max_input_angular_ = 7.0;
-    ocs2::scalar_t max_state_velocity_ = 6.0;
+    ocs2::scalar_t max_input_acceleration_ = 3.5;  // was 6.0 — tightened to prevent wall crashes
+    ocs2::scalar_t max_input_angular_ = 6.0;       // was 7.0
+    ocs2::scalar_t max_state_velocity_ = 2.5;      // was 6.0 — hard cap to enforce safe speed
 };
 
 #endif //SENTRY_PLANNING_STATEINPUTCONSTRAINT_H

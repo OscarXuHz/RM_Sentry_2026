@@ -39,7 +39,17 @@ void Smoother::init(std::vector<Eigen::Vector3d>& global_path, Eigen::Vector3d s
 
     tailP = path[path.size() - 1];
     pieceN = path.size() - 1;
-    cubSpline.setConditions(headP, start_vels, tailP, pieceN);
+
+    // Store head velocity for MINCO
+    headV_stored = start_vels;
+    // Approximate head acceleration as zero (consistent with boundary conditions)
+    headA_stored = Eigen::Vector2d::Zero();
+
+    // MINCO: set boundary conditions with position, velocity, acceleration
+    // Tail velocity and acceleration are zero (stop at goal)
+    mincoTraj.setConditions(headP, headV_stored, headA_stored,
+                            tailP, Eigen::Vector2d::Zero(), Eigen::Vector2d::Zero(),
+                            pieceN);
 }
 
 bool Smoother::getObsPosition(double start_x, double start_y, double start_z,
@@ -68,72 +78,192 @@ bool Smoother::getObsPosition(double start_x, double start_y, double start_z,
 
 double Smoother::costFunction(void *ptr, const Eigen::VectorXd &x, Eigen::VectorXd &g)
 {
-    clock_t time_1 = clock();
-
     auto instance = reinterpret_cast<Smoother *>(ptr);
     const int points_num = instance->pieceN - 1;
-    Eigen::Matrix2Xd grad;
-    grad.resize(2, points_num);
-    grad.setZero();
+    const int N = instance->pieceN;
     double cost = 0.0;
 
+    // ── Parse decision variables ──
+    // First 2*(N-1) entries: inner waypoint positions (x, y)
+    // Last N entries: unconstrained tau_i mapped to T_i via forwardT()
     Eigen::Matrix2Xd inPs;
     inPs.resize(2, points_num);
     inPs.row(0) = x.head(points_num);
-    inPs.row(1) = x.tail(points_num);
+    inPs.row(1) = x.segment(points_num, points_num);
+
+    // Map unconstrained tau -> positive durations T via diffeomorphism
+    Eigen::VectorXd tau = x.tail(N);
     Eigen::VectorXd inTimes;
-    inTimes.resize(instance->pieceN);
+    forwardT(tau, inTimes);
 
-    for(int i = 0; i < instance->pieceN; i++){
-        inTimes(i) = 0.3 / instance->desire_veloity;  // 0.3对应分段采样间距0.3m
-    }
-    instance->cubSpline.setInnerPoints(inPs, inTimes);
+    // ── Build MINCO trajectory ──
+    instance->mincoTraj.setParameters(inPs, inTimes);
 
-    if(!instance->init_obs) {
+    // ── Initialize/refresh obstacle cache ──
+    // (Fix 30) Refresh every 50 iterations so the optimizer sees obstacles
+    // near the waypoints' CURRENT positions, not stale initial positions.
+    // The refresh only rebuilds the cache; gradient computation happens below.
+    instance->cost_call_count++;
+    if(!instance->init_obs || (instance->cost_call_count % 50 == 0)) {
+        instance->allobs.clear();
+        instance->mid_distance.clear();
+        instance->init_obs = false;
         for (int i = 0; i < points_num; ++i) {
-            double nearest_cost = 0.0;
+            double nearest_cost_dummy = 0.0;
             Eigen::Vector2d x_cur = inPs.col(i);
-            Eigen::Vector2d obstacleGrad = instance->obstacleTerm(i, x_cur, nearest_cost);
+            // This call with init_obs=false populates allobs[i] and mid_distance[i]
+            instance->obstacleTerm(i, x_cur, nearest_cost_dummy);
+        }
+        instance->init_obs = true;
+        // Cache is now fresh — fall through to gradient computation below
+    }
+
+    // ── Cost weights ──
+    // (Fix 31) Rebalanced to reduce zigzag near turns and endpoints.
+    // Previous wFidelity=500 anchored EVERY 0.3m waypoint to its A* reference,
+    // preventing the smoother from rounding corners. Reduced to 100 so the
+    // smoother can actually smooth turns. The 0.5m drift clamp remains as the
+    // hard safety limit, not fidelity. wSmooth raised to 5e-3 for stronger
+    // jerk reduction near turns.
+    const double wSmooth = 2e-2;      // jerk energy weight (strongly smooths corners)
+    const double wFidelity = 20.0;    // elastic band — weak bias, allows corner rounding
+    const double wVel = 1e3;          // average velocity soft constraint
+    const double wMinTime = 1e3;      // minimum-time penalty
+    const double energyGradClip = 2000.0;  // per-waypoint energy gradient norm cap
+
+    // ── Jerk energy cost and gradients ──
+    double energy = instance->mincoTraj.getEnergy();
+    // Guard against NaN/Inf energy (can happen with degenerate T)
+    if (!std::isfinite(energy)) {
+        g.setZero();
+        return 1e18;
+    }
+    cost += wSmooth * energy;
+
+    Eigen::Matrix2Xd energy_grad;
+    instance->mincoTraj.getGradWaypoints(energy_grad);
+    energy_grad *= wSmooth;
+
+    // Clip per-waypoint energy gradient to prevent domination from
+    // short-T segments (where 1/T^n terms explode)
+    for (int i = 0; i < points_num; i++) {
+        double eg_norm = energy_grad.col(i).norm();
+        if (eg_norm > energyGradClip) {
+            energy_grad.col(i) *= energyGradClip / eg_norm;
         }
     }
-    instance->init_obs = true;
 
-    /// 整个优化过程最最最耗时的地方
-    double energy;
-    Eigen::Matrix2Xd energy_grad;
-    Eigen::VectorXd energyT_grad, energyTau_grad;
-    energy_grad.resize(2, points_num);
-    energy_grad.setZero();
+    Eigen::VectorXd energyT_grad;
+    instance->mincoTraj.getGradTimes(energyT_grad);
+    energyT_grad *= wSmooth;
+    // Clip time gradient too
+    for (int i = 0; i < N; i++) {
+        energyT_grad(i) = std::max(-energyGradClip, std::min(energyGradClip, energyT_grad(i)));
+    }
 
-    energyT_grad.resize(instance->pieceN);
-    energyT_grad.setZero();
-    energyTau_grad.resize(instance->pieceN);
-    energyTau_grad.setZero();
+    // Chain rule: grad_tau = grad_T * dT/dtau via backwardGradT
+    Eigen::VectorXd energyTau_grad;
+    backwardGradT(tau, energyT_grad, energyTau_grad);
 
-    instance->cubSpline.getEnergy(energy);  // 能量损失cost和梯度
-    instance->cubSpline.getGradSmooth(energy_grad, energyT_grad);
-    cost += energy;
-    grad += energy_grad;
+    // ── Elastic band / path fidelity cost ──
+    // Anchors waypoints to their original A* reference positions
+    Eigen::Matrix2Xd fidelity_grad;
+    fidelity_grad.resize(2, points_num);
+    fidelity_grad.setZero();
+    for (int i = 0; i < points_num; i++) {
+        Eigen::Vector2d diff = inPs.col(i) - instance->refWaypoints.col(i);
+        cost += wFidelity * diff.squaredNorm();
+        fidelity_grad.col(i) = 2.0 * wFidelity * diff;
+    }
 
+    // ── Average velocity penalty (with proper gradient) ──
+    // Penalizes segments whose average velocity (seg_length / T_i) exceeds limit
+    Eigen::Matrix2Xd vel_spatial_grad;
+    vel_spatial_grad.resize(2, points_num);
+    vel_spatial_grad.setZero();
+    Eigen::VectorXd vel_time_grad;
+    vel_time_grad.resize(N);
+    vel_time_grad.setZero();
+
+    double v_limit = instance->desire_veloity * 1.5;
+    for (int i = 0; i < N; i++) {
+        Eigen::Vector2d p_start = (i == 0) ? instance->headP : inPs.col(i - 1);
+        Eigen::Vector2d p_end   = (i == N - 1) ? instance->tailP : inPs.col(i);
+        Eigen::Vector2d seg = p_end - p_start;
+        double seg_len = seg.norm();
+        if (seg_len < 1e-8) continue;
+
+        double avg_vel = seg_len / inTimes(i);
+        if (avg_vel > v_limit) {
+            double excess = avg_vel - v_limit;
+            cost += wVel * excess * excess;
+
+            // Gradient w.r.t. segment endpoints
+            Eigen::Vector2d dir = seg / seg_len;
+            double d_avgvel_d_len = 1.0 / inTimes(i);
+            Eigen::Vector2d grad_pend   =  2.0 * wVel * excess * d_avgvel_d_len * dir;
+            Eigen::Vector2d grad_pstart = -2.0 * wVel * excess * d_avgvel_d_len * dir;
+
+            // p_end is inPs.col(i) unless i == N-1 (tailP, fixed)
+            if (i < N - 1)  vel_spatial_grad.col(i) += grad_pend;
+            // p_start is inPs.col(i-1) unless i == 0 (headP, fixed)
+            if (i > 0)      vel_spatial_grad.col(i - 1) += grad_pstart;
+
+            // Gradient w.r.t. time: d(avg_vel)/dT = -seg_len / T^2
+            vel_time_grad(i) += 2.0 * wVel * excess * (-seg_len / (inTimes(i) * inTimes(i)));
+        }
+    }
+
+    // Chain velocity time gradient through tau mapping
+    Eigen::VectorXd velTau_grad;
+    backwardGradT(tau, vel_time_grad, velTau_grad);
+
+    // ── Minimum time penalty ──
+    // Prevents durations from collapsing (causes coefficient blow-up)
+    Eigen::VectorXd mintime_T_grad;
+    mintime_T_grad.resize(N);
+    mintime_T_grad.setZero();
+    const double T_min = 0.03;
+    for (int i = 0; i < N; i++) {
+        if (inTimes(i) < T_min) {
+            double deficit = T_min - inTimes(i);
+            cost += wMinTime * deficit * deficit;
+            mintime_T_grad(i) = -2.0 * wMinTime * deficit;
+        }
+    }
+    Eigen::VectorXd mintimeTau_grad;
+    backwardGradT(tau, mintime_T_grad, mintimeTau_grad);
+
+    // ── Obstacle cost (unchanged) ──
     Eigen::Matrix2Xd potential_grad;
     potential_grad.resize(2, points_num);
     potential_grad.setZero();
-    for(int i = 0; i<points_num; ++i){
+    for(int i = 0; i < points_num; ++i){
         double nearest_cost = 0.0;
         Eigen::Vector2d x_cur = inPs.col(i);
         Eigen::Vector2d obstacleGrad = instance->obstacleTerm(i, x_cur, nearest_cost);
-
         potential_grad.col(i) = obstacleGrad;
         cost += nearest_cost;
     }
-    clock_t time_2 = clock();
-    grad += potential_grad;
+
+    // ── Assemble total gradient ──
+    Eigen::Matrix2Xd total_spatial_grad = energy_grad + potential_grad
+                                        + fidelity_grad + vel_spatial_grad;
 
     g.setZero();
-    // 控制点和时间梯度
-    g.head(points_num) = grad.row(0).transpose();
-    g.tail(points_num) = grad.row(1).transpose();
-    clock_t time_3 = clock();
+    // Spatial gradients: first 2*(N-1) entries
+    g.head(points_num) = total_spatial_grad.row(0).transpose();
+    g.segment(points_num, points_num) = total_spatial_grad.row(1).transpose();
+    // Time gradients: last N entries (in tau space)
+    g.tail(N) = energyTau_grad + velTau_grad + mintimeTau_grad;
+
+    // Final NaN/Inf guard — return huge cost with zero gradient so
+    // L-BFGS backs off this step
+    if (!std::isfinite(cost) || !g.allFinite()) {
+        g.setZero();
+        return 1e18;
+    }
+
     return cost;
 }
 
@@ -227,29 +357,53 @@ void Smoother::smoothPath()
     mid_distance.clear();
     init_obs = false;
     init_vel = false;
-    // TODO 时间维度N 空间维度2(N-1)
+    cost_call_count = 0;  // (Fix 30) reset iteration counter for obstacle cache refresh
+    // MINCO joint space-time optimization: 2*(N-1) spatial + N time variables
     if(path.size()<3){
         ROS_ERROR("[Smooth Path] path.size()<3, No need to optimize");
         return;
     }
-    Eigen::VectorXd x(pieceN * 2 - 2);
 
-    for(int i = 0; i < pieceN - 1; i++){  // 控制点
+    // Decision variable: [x_1..x_{N-1}, y_1..y_{N-1}, tau_1..tau_N]
+    const int spatial_dim = 2 * (pieceN - 1);
+    const int total_dim = spatial_dim + pieceN;
+    Eigen::VectorXd x(total_dim);
+
+    // Initialize spatial variables from sampled path
+    for(int i = 0; i < pieceN - 1; i++){
         x(i) = path[i + 1].x();
         x(i + pieceN - 1) = path[i + 1].y();
     }
 
+    // Store reference waypoints for elastic band cost
+    refWaypoints.resize(2, pieceN - 1);
+    for(int i = 0; i < pieceN - 1; i++){
+        refWaypoints(0, i) = path[i + 1].x();
+        refWaypoints(1, i) = path[i + 1].y();
+    }
+
+    // Initialize time variables proportional to segment length
+    Eigen::VectorXd T_init(pieceN);
+    for(int i = 0; i < pieceN; i++){
+        double seg_len = (path[i + 1] - path[i]).norm();
+        T_init(i) = std::max(seg_len / desire_veloity, 0.05);
+    }
+    Eigen::VectorXd tau_init;
+    backwardT(T_init, tau_init);
+    x.tail(pieceN) = tau_init;
+
     obs_coord.clear();
 
     double minCost = 0.0;
-    lbfgs_params.mem_size = 64;  // 32
+    lbfgs_params.mem_size = 64;
     lbfgs_params.past = 5;
     lbfgs_params.min_step = 1.0e-32;
     lbfgs_params.g_epsilon = 2.0e-5;
-    lbfgs_params.delta = 2e-5;  // 3e-4
-    lbfgs_params.max_linesearch = 32;  // 32
+    lbfgs_params.delta = 2e-5;
+    lbfgs_params.max_linesearch = 32;
     lbfgs_params.f_dec_coeff = 1.0e-4;
     lbfgs_params.s_curv_coeff = 0.9;
+    lbfgs_params.max_iterations = 200;  // Prevent infinite loop
     int ret = lbfgs::lbfgs_optimize(x,
                                     minCost,
                                     &Smoother::costFunction,
@@ -257,37 +411,113 @@ void Smoother::smoothPath()
                                     this,
                                     lbfgs_params);
 
-    if (ret >= 0 || ret == lbfgs::LBFGSERR_MAXIMUMLINESEARCH)
+    if (ret >= 0 || ret == lbfgs::LBFGSERR_MAXIMUMLINESEARCH
+        || ret == lbfgs::LBFGSERR_MAXIMUMITERATION)
     {
         if(ret > 0){
-            ROS_DEBUG_STREAM("[Smooth Optimize] Optimization Success: "
+            ROS_DEBUG_STREAM("[Smooth Optimize] MINCO Optimization Success: "
                              << lbfgs::lbfgs_stderr(ret));
         }else if (ret == 0){
-            ROS_INFO_STREAM("[Smooth Optimize] Optimization STOP: "
+            ROS_INFO_STREAM("[Smooth Optimize] MINCO Optimization STOP: "
                                      << lbfgs::lbfgs_stderr(ret));
         }
+        else if (ret == lbfgs::LBFGSERR_MAXIMUMITERATION){
+            ROS_INFO("[Smooth Optimize] MINCO reached max iterations (200)");
+        }
         else{
-            ROS_INFO_STREAM("[Smooth Optimize] Optimization reaches the maximum number of evaluations: "
+            ROS_INFO_STREAM("[Smooth Optimize] MINCO reaches max evaluations: "
                                     << lbfgs::lbfgs_stderr(ret));
         }
 
+        // Extract optimized spatial variables — clamp drift from reference
+        double max_drift = 0.0;
         for(int i = 0; i < pieceN - 1; i++){
+            double drift_x = x(i) - refWaypoints(0, i);
+            double drift_y = x(i + pieceN - 1) - refWaypoints(1, i);
+            double drift = std::sqrt(drift_x * drift_x + drift_y * drift_y);
+            max_drift = std::max(max_drift, drift);
+            // Clamp: obstacle cache refreshes every 50 iters (Fix 30) so
+            // waypoints can safely drift further. 0.8m allows corner rounding.
+            const double clamp_radius = 0.8;
+            if (drift > clamp_radius) {
+                double scale = clamp_radius / drift;
+                x(i) = refWaypoints(0, i) + drift_x * scale;
+                x(i + pieceN - 1) = refWaypoints(1, i) + drift_y * scale;
+            }
             path[i + 1].x() = x(i);
             path[i + 1].y() = x(i + pieceN - 1);
         }
         pathInPs.resize(2, pieceN - 1);
         pathInPs.row(0) = x.head(pieceN - 1);
         pathInPs.row(1) = x.segment(pieceN - 1, pieceN - 1);
+
+        // Extract optimized time durations: tau -> T via forwardT
+        Eigen::VectorXd tau_opt = x.tail(pieceN);
+        Eigen::VectorXd T_opt;
+        forwardT(tau_opt, T_opt);
+
+        // Post-process: enforce velocity feasibility by scaling up durations
+        // Rebuild trajectory with optimized values to evaluate velocities
+        Eigen::Matrix2Xd finalInPs;
+        finalInPs.resize(2, pieceN - 1);
+        finalInPs.row(0) = x.head(pieceN - 1);
+        finalInPs.row(1) = x.segment(pieceN - 1, pieceN - 1);
+        mincoTraj.setParameters(finalInPs, T_opt);
+
+        double v_max_limit = desire_veloity * 1.8;
+        double max_velocity = 0.0;
+        for(int i = 0; i < pieceN; i++){
+            double maxVel = 0.0;
+            for(int s = 0; s <= 10; s++){
+                double t = T_opt(i) * s / 10.0;
+                double vel = mincoTraj.evaluateVel(i, t).norm();
+                if(vel > maxVel) maxVel = vel;
+            }
+            if(maxVel > max_velocity) max_velocity = maxVel;
+            if(maxVel > v_max_limit && maxVel > 1e-6){
+                // Cap inflation factor to prevent time explosion
+                double inflation = std::min(maxVel / v_max_limit, 5.0);
+                T_opt(i) *= inflation;
+            }
+        }
+
+        // Clamp per-segment times to sane range [0.01, 2.0]
+        // Prevents total trajectory time from exploding (which crashes RViz)
+        const double T_lower = 0.01;
+        const double T_upper = 2.0;
+        for(int i = 0; i < pieceN; i++){
+            if(T_opt(i) < T_lower) T_opt(i) = T_lower;
+            if(T_opt(i) > T_upper) T_opt(i) = T_upper;
+        }
+
+        // Store optimized durations for downstream (Refenecesmooth)
+        m_trapezoidal_time.clear();
+        m_trapezoidal_time.resize(pieceN);
+        for(int i = 0; i < pieceN; i++){
+            m_trapezoidal_time[i] = T_opt(i);
+        }
+        ROS_INFO("[Smooth Optimize] MINCO: cost=%.1f total_T=%.3f(init %.3f) "
+                 "max_drift=%.3f max_vel=%.1f segs=%d",
+                 minCost, T_opt.sum(), T_init.sum(),
+                 max_drift, max_velocity, pieceN);
     }
     else
     {
         // Keep the original sampled path as a safe fallback instead of
         // discarding it.  The sampled path already avoids obstacles (it comes
         // from the topo-search + A* pruning), so it is valid for tracking.
-        ROS_WARN_STREAM("[Smooth Optimize] Optimization failed (" 
+        ROS_WARN_STREAM("[Smooth Optimize] MINCO Optimization failed (" 
                         << lbfgs::lbfgs_stderr(ret)
                         << "), falling back to unsmoothed path (" 
                         << path.size() << " pts)");
+
+        // Fallback: populate m_trapezoidal_time with segment-length-based durations
+        m_trapezoidal_time.clear();
+        m_trapezoidal_time.resize(pieceN);
+        for(int i = 0; i < pieceN; i++){
+            double seg_len = (path[i + 1] - path[i]).norm();
+            m_trapezoidal_time[i] = std::max(seg_len / desire_veloity, 0.05);
+        }
     }
 }
 
@@ -295,25 +525,62 @@ void Smoother::pathResample()
 {
     ROS_INFO("[Smooth Resample] resample");
     finalpath.clear();
-    std::vector<Eigen::Vector2d> trajectory_point;
-    const int step = 2;
-    trajectory_point.clear();
-    if(path.size()<2){
-        ROS_ERROR("[Smooth Resample] path Resample.size()<3, No path");
+    if(path.size() < 2){
+        ROS_ERROR("[Smooth Resample] path size < 2, No path");
         return;
     }
-    trajectory_point.push_back(path[0]);
-
-    int sample_num = int((path.size() - 1)/step);
-    for (int i = 1; i<sample_num; i++){
-        trajectory_point.push_back(path[i*step]);
+    if(path.size() <= 4){
+        // Too few points to decimate — keep all
+        finalpath.assign(path.begin(), path.end());
+        ROS_INFO("[Smooth Resample] path too short (%zu pts), keeping all", path.size());
+        return;
     }
 
+    const int step = 2;
 
-    if(int(path.size() -1) > step*sample_num){
-        trajectory_point.push_back((path.back()));
+    // Build decimated index list: always keep first, every step-th, always keep last
+    std::vector<int> keep_indices;
+    keep_indices.push_back(0);
+    for (int i = step; i < (int)path.size() - 1; i += step) {
+        keep_indices.push_back(i);
     }
-    finalpath.assign(path.begin(), path.end());
+    keep_indices.push_back((int)path.size() - 1);
+
+    // Build decimated waypoint list
+    std::vector<Eigen::Vector2d> trajectory_point;
+    for (int idx : keep_indices) {
+        trajectory_point.push_back(path[idx]);
+    }
+
+    // Merge m_trapezoidal_time: each resampled segment's duration is the
+    // sum of the original MINCO durations it spans.
+    if (!m_trapezoidal_time.empty() &&
+        (int)m_trapezoidal_time.size() == (int)path.size() - 1) {
+        std::vector<double> merged_times;
+        for (int k = 0; k < (int)keep_indices.size() - 1; k++) {
+            double merged_t = 0.0;
+            for (int j = keep_indices[k]; j < keep_indices[k+1]; j++) {
+                merged_t += m_trapezoidal_time[j];
+            }
+            merged_times.push_back(std::max(merged_t, 0.01));
+        }
+        m_trapezoidal_time = merged_times;
+    }
+
+    finalpath.assign(trajectory_point.begin(), trajectory_point.end());
+
+    // Log max turning angle for diagnostics
+    double max_angle_deg = 0.0;
+    for (int i = 1; i < (int)finalpath.size() - 1; i++) {
+        Eigen::Vector2d v1 = finalpath[i] - finalpath[i-1];
+        Eigen::Vector2d v2 = finalpath[i+1] - finalpath[i];
+        double dot = v1.dot(v2);
+        double cross = v1.x()*v2.y() - v1.y()*v2.x();
+        double angle = std::abs(std::atan2(cross, dot)) * 180.0 / M_PI;
+        if (angle > max_angle_deg) max_angle_deg = angle;
+    }
+    ROS_INFO("[Smooth Resample] %zu -> %zu waypoints, %zu time segs, max_turn=%.1f deg",
+             path.size(), finalpath.size(), m_trapezoidal_time.size(), max_angle_deg);
 }
 
 std::vector<Eigen::Vector2d> Smoother::getPath() /// 优化过后的最终轨迹控制点
@@ -391,10 +658,10 @@ void Smoother::getObsEdge(Eigen::Vector2d xcur)
     double start_z = 0.0;
     double R = 4.0;
 
-    for(int i = -8; i <= 8; i++) /// 这里搜索范围太小会导致一系列的问题，包括但不限于小收敛误差需求时导致的撞墙，
-        /// 因为你搜不到较远处的障碍物，但是太多了就会严重拖慢速度。
+    for(int i = -12; i <= 12; i++) /// (Fix 31) was ±8; widened to ±12 (±0.6m at 0.05m/cell)
+        /// to match increased drift clamp (0.8m). Covers obstacle search area.
     {
-        for (int j = -8; j <=8; j ++)
+        for (int j = -12; j <=12; j ++)
         {
             int x_idx = std::min(std::max(start_idx.x() + i, 0), global_map->GLX_SIZE - 1);
             int y_idx = std::min(std::max(start_idx.y() + j, 0), global_map->GLY_SIZE - 1);

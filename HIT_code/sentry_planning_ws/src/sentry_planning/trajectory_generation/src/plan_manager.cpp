@@ -139,10 +139,117 @@ bool planner_manager::replanFinding(const Eigen::Vector3d start_point, const Eig
             }
         }
         else{
-            if(!pathFinding(start_point, target_point, start_vel))
-                return false;
-            else
+            if(target_distance > 0.5){
+                // Target moved — need full replan to new target
+                ROS_WARN("[Manager REPLAN] target moved (%.2fm), full global replan", target_distance);
+                // Remember old path length for hysteresis comparison
+                double old_len = 0;
+                for(size_t k = 1; k < optimized_path.size(); k++)
+                    old_len += (optimized_path[k] - optimized_path[k-1]).head<2>().norm();
+
+                std::vector<Eigen::Vector3d> old_path = optimized_path;
+                if(!pathFinding(start_point, target_point, start_vel)){
+                    optimized_path = old_path;  // restore on failure
+                    return false;
+                }
+
+                // Hysteresis: keep old path if new path is NOT significantly shorter
+                double new_len = 0;
+                for(size_t k = 1; k < optimized_path.size(); k++)
+                    new_len += (optimized_path[k] - optimized_path[k-1]).head<2>().norm();
+                if(old_len > 0 && new_len > old_len * 0.8){
+                    // New path is not much shorter — check if old path is still collision-free
+                    Eigen::Vector3d dummy_pos, dummy_start, dummy_target;
+                    int dummy_sid, dummy_eid;
+                    bool old_collision = astar_path_finder->checkPathCollision(
+                        old_path, dummy_pos, start_point, dummy_start, dummy_target, dummy_sid, dummy_eid);
+                    if(!old_collision){
+                        ROS_INFO("[Manager REPLAN] keeping old path (old=%.1fm new=%.1fm, no collision)", old_len, new_len);
+                        optimized_path = old_path;
+                        // (Fix 14) Trim forward to nearest waypoint ahead of robot
+                        {
+                            int closest_idx = 0;
+                            double min_dist = 1e9;
+                            for (int i = 0; i < (int)optimized_path.size(); i++) {
+                                double d = (optimized_path[i].head<2>() - start_point.head<2>()).norm();
+                                if (d < min_dist) {
+                                    min_dist = d;
+                                    closest_idx = i;
+                                }
+                            }
+                            int trim_idx = std::min(closest_idx + 1, (int)optimized_path.size() - 1);
+                            std::vector<Eigen::Vector3d> trimmed;
+                            trimmed.push_back(start_point);
+                            for (int i = trim_idx; i < (int)optimized_path.size(); i++) {
+                                trimmed.push_back(optimized_path[i]);
+                            }
+                            optimized_path = trimmed;
+                        }
+                        // Re-generate reference from trimmed path with current velocity
+                        double reference_speed = isxtl? reference_desire_speedxtl : reference_desire_speed;
+                        path_smoother->init(optimized_path, start_vel, reference_speed);
+                        path_smoother->smoothPath();
+                        path_smoother->pathResample();
+                        final_path = path_smoother->getPath();
+                        if(final_path.size() < 2) return false;
+                        reference_path->setGlobalPath(start_vel, final_path, reference_a_max, reference_speed, isxtl);
+                        reference_path->getRefTrajectory(ref_trajectory, path_smoother->m_trapezoidal_time);
+                        if(ref_trajectory.size() < 2) return false;
+                    }
+                }
                 return true;
+            }
+            // (Fix 33a) Check cross-track deviation: if robot is far from planned path,
+            // the path is no longer useful — trigger full replan.
+            {
+                double min_dist = 1e9;
+                for (int i = 0; i < (int)optimized_path.size(); i++) {
+                    double d = (optimized_path[i].head<2>() - start_point.head<2>()).norm();
+                    if (d < min_dist) min_dist = d;
+                }
+                if (min_dist > 1.0) {
+                    ROS_WARN("[Manager REPLAN] robot %.2fm from path, full replan", min_dist);
+                    if(!pathFinding(start_point, target_point, start_vel))
+                        return false;
+                    else
+                        return true;
+                }
+            }
+            // Path is collision-free and target unchanged — re-anchor from current position
+            // (Fix 14) Always regenerate reference trajectory from robot's current position
+            // so the published polynomial starts here, not at the stale original start.
+            ROS_INFO("[Manager REPLAN] path safe & target unchanged, re-anchoring from cur pos");
+            {
+                // Trim optimized_path forward to nearest waypoint ahead of robot
+                int closest_idx = 0;
+                double min_dist = 1e9;
+                for (int i = 0; i < (int)optimized_path.size(); i++) {
+                    double d = (optimized_path[i].head<2>() - start_point.head<2>()).norm();
+                    if (d < min_dist) {
+                        min_dist = d;
+                        closest_idx = i;
+                    }
+                }
+                int trim_idx = std::min(closest_idx + 1, (int)optimized_path.size() - 1);
+                std::vector<Eigen::Vector3d> trimmed;
+                trimmed.push_back(start_point);
+                for (int i = trim_idx; i < (int)optimized_path.size(); i++) {
+                    trimmed.push_back(optimized_path[i]);
+                }
+                optimized_path = trimmed;
+            }
+            {
+                double reference_speed = isxtl ? reference_desire_speedxtl : reference_desire_speed;
+                path_smoother->init(optimized_path, start_vel, reference_speed);
+                path_smoother->smoothPath();
+                path_smoother->pathResample();
+                final_path = path_smoother->getPath();
+                if (final_path.size() < 2) return false;
+                reference_path->setGlobalPath(start_vel, final_path, reference_a_max, reference_speed, isxtl);
+                reference_path->getRefTrajectory(ref_trajectory, path_smoother->m_trapezoidal_time);
+                if (ref_trajectory.size() < 2) return false;
+            }
+            return true;
         }
 
     }

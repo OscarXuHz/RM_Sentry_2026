@@ -26,6 +26,11 @@ std::vector<double> extrinT;
 std::vector<double> extrinR;
 bool   runtime_pos_log, pcd_save_en, path_en, extrinsic_est_en = true;
 bool   scan_pub_en, scan_body_pub_en;
+std::string pcd_save_output_path;
+bool pcd_level_floor;
+double pcd_floor_quantile, pcd_floor_target_z;
+int pcd_floor_min_points;
+int pcd_pca_max_iterations;
 shared_ptr<Preprocess> p_pre;
 double time_lag_imu_to_lidar = 0.0;
 
@@ -79,6 +84,16 @@ void readParameters(ros::NodeHandle &nh)
   nh.param<std::vector<double>>("mapping/gravity_init", gravity_init, std::vector<double>());
   nh.param<std::vector<double>>("mapping/extrinsic_T", extrinT, std::vector<double>());
   nh.param<std::vector<double>>("mapping/extrinsic_R", extrinR, std::vector<double>());
+
+  // Safety: ensure gravity vectors have 3 elements to prevent segfault from VEC_FROM_ARRAY
+  if (gravity.size() < 3) {
+    ROS_WARN("[Point-LIO] mapping/gravity not set or has < 3 elements, defaulting to [0,0,-9.81]");
+    gravity = {0.0, 0.0, -9.810};
+  }
+  if (gravity_init.size() < 3) {
+    ROS_WARN("[Point-LIO] mapping/gravity_init not set or has < 3 elements, defaulting to [0,0,-9.81]");
+    gravity_init = {0.0, 0.0, -9.810};
+  }
   nh.param<bool>("odometry/publish_odometry_without_downsample", publish_odometry_without_downsample, false);
   nh.param<bool>("publish/path_en",path_en, true);
   nh.param<bool>("publish/scan_publish_en",scan_pub_en,1);
@@ -86,5 +101,11 @@ void readParameters(ros::NodeHandle &nh)
   nh.param<bool>("runtime_pos_log_enable", runtime_pos_log, 0);
   nh.param<bool>("pcd_save/pcd_save_en", pcd_save_en, false);
   nh.param<int>("pcd_save/interval", pcd_save_interval, -1);
+  nh.param<std::string>("pcd_save/output_path", pcd_save_output_path, std::string(""));
+  nh.param<bool>("pcd_save/level_floor", pcd_level_floor, false);
+  nh.param<double>("pcd_save/floor_quantile", pcd_floor_quantile, 0.08);
+  nh.param<double>("pcd_save/floor_target_z", pcd_floor_target_z, 0.0);
+  nh.param<int>("pcd_save/min_floor_points", pcd_floor_min_points, 1000);
+  nh.param<int>("pcd_save/pca_max_iterations", pcd_pca_max_iterations, 5);
 }
 

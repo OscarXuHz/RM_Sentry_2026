@@ -20,18 +20,18 @@ void imuCallback(const sensor_msgs::Imu::ConstPtr& msg) {
 std::string input_imu_topic;
 std::string output_imu_topic;
 int main(int argc, char **argv) {
-    std::string node_name="imu_filter";
-    ros::init(argc, argv, node_name);
+    ros::init(argc, argv, "imu_filter");
     ros::NodeHandle nh;
-    if(!nh.getParam("/"+node_name+"/input_imu_topic", input_imu_topic)){
+    ros::NodeHandle pnh("~");   // private namespace — resolves <param> inside <node>
+    if(!pnh.getParam("input_imu_topic", input_imu_topic)){
         ROS_ERROR("Failed to retrieve parameter 'input_imu_topic'");
         return -1;
     }
-    if(!nh.getParam("/"+node_name+"/output_imu_topic", output_imu_topic)){
+    if(!pnh.getParam("output_imu_topic", output_imu_topic)){
             ROS_ERROR("Failed to retrieve parameter 'output_imu_topic'");
             return -1;
     }
-    if(!nh.getParam("/"+node_name+"/gravity", gravity)){
+    if(!pnh.getParam("gravity", gravity)){
         ROS_ERROR("Failed to retrieve parameter 'gravity'");
         return -1;
     }

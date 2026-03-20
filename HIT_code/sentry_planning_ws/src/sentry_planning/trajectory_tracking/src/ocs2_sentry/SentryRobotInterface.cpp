@@ -59,7 +59,7 @@ void SentryRobotInterface::setupOptimalConrolProblem(const std::string& taskFile
     // Rollout
     rolloutPtr_.reset(new ocs2::TimeTriggeredRollout(*problem_.dynamicsPtr, rolloutSettings_));
     // Soft Constraints
-    ocs2::RelaxedBarrierPenalty::Config barrierPenaltyConfig(0.1, 0.05);
+    ocs2::RelaxedBarrierPenalty::Config barrierPenaltyConfig(0.5, 0.1);  // was (2.0, 0.1); mu=2 caused boundary oscillation; mu=0.5 enforces limits softly
     ocs2::RelaxedBarrierPenalty::Config barriercollisionPenaltyConfig(0.1, 0.2);
     std::unique_ptr<ocs2::StateInputSoftConstraint> stateInputSoftConstraintPtr =
             std::make_unique<ocs2::StateInputSoftConstraint>(std::make_unique<SentryStateInputConstraint>(), std::make_unique<ocs2::RelaxedBarrierPenalty>(barrierPenaltyConfig));

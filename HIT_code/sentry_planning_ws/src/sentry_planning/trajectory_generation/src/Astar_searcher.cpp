@@ -156,7 +156,15 @@ std::vector<Eigen::Vector3d> AstarPathFinder::smoothTopoPath(std::vector<Eigen::
                 }
 
                 if(global_map->isOccupied(temp_id.x(), temp_id.y(), temp_id.z(), second_height)){
-                    continue;  // TODO 暂时处理为不考虑这种情况
+                    // (Fix 16) Occupied waypoint on topo path — treat as collision to
+                    // prevent visibility shortcutting from creating paths that graze obstacles
+                    if(!collision){
+                        collision = true;
+                        temp = tail_pos;
+                        bool easy = getNearPoint(temp, head_pos, temp);
+                        iter_idx = i;
+                    }
+                    continue;
                 }
 
                 if (!lineVisib(tail_pos, head_pos, colli_pt, 0.05) && !collision){  // 记录最近的可见点的第一个不可见点，这样如果中间又有可见的点是就可以把collision改成true

@@ -330,9 +330,9 @@ void TopoSearcher::createGraph(Eigen::Vector3d start, Eigen::Vector3d end)
 
                 int idx, idy, idz;
                 global_map->coord2gridIndex(pt.x(), pt.y(), pt.z(), idx, idy, idz);
-                if(global_map->GridNodeMap[idx][idy]->exist_second_height){
-                    pt.z() = 0.08;
-                }
+                // Fix 34a: Removed hardcoded pt.z()=0.08 for bridge areas.
+                // second_height is never computed, so this just created phantom
+                // guard points at the wrong z-height.
                 GraphNode::Ptr guard = GraphNode::Ptr (new GraphNode(pt, GraphNode::Guard, ++node_id));
                 m_graph.push_back(guard);
 
@@ -957,7 +957,7 @@ bool TopoSearcher::lineVisib(const Eigen::Vector3d& p1, const Eigen::Vector3d& p
             return false;
         }
 
-        if (global_map->isStaticOccupied(pt_idx, pt_idy, second_height)){
+        if (global_map->isOccupied(pt_idx, pt_idy, pt_idz, second_height)){
             return false;
         }
         last_height = height;

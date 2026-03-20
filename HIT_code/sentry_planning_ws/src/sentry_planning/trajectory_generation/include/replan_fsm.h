@@ -81,6 +81,7 @@ public:
     bool planning_succeed;
     bool visualization_flag;
     bool replan_flag = false;  // 判断重规划是否成功
+    ros::Time last_replan_time;  // (Fix 30) cooldown timer to prevent replan oscillation
 
     double robot_radius;
     double robot_radius_dash;

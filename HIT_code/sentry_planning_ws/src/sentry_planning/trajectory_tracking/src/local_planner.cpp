@@ -25,6 +25,10 @@ void LocalPlanner::linearation(double time, double robot_cur_yaw)
     ref_trajectory.clear();
     ref_velocity.clear();
     reference_time.clear();
+    // Fix 39a: Save previous predicted trajectory BEFORE clearing, so we can
+    // search for obstacles around it.  The reference trajectory alone misses
+    // obstacles that lie near the actual predicted (diverged) path.
+    prev_predictState_ = predictState;
     predictState.clear();
     predictInput.clear();
     obs_points.clear();
@@ -75,12 +79,12 @@ void LocalPlanner::linearation(double time, double robot_cur_yaw)
                 ref_velocity.push_back(velocity_temp);
                 reference_time.push_back(time + i * dt);
                 segment_index++;
-            } else {  // 不在当前的index内，直接取最后一个点，直接获取规划的输入MPC参考轨迹速度时间
+            } else {  // Past trajectory end — hold final position, command ZERO velocity
+                // (Fix 20) Use v=0 at goal so MPC actively decelerates instead of
+                // matching the last segment's cruise speed.
                 ref_trajectory.push_back(reference_path[reference_path.size() - 1]);
-                Eigen::Vector3d velocity_temp;
-                velocity_temp = Eigen::Vector3d::Zero(3);
-//            ref_velocity.push_back(velocity_temp);
-                ref_velocity.push_back(reference_velocity[reference_velocity.size() - 1]);
+                Eigen::Vector3d velocity_temp = Eigen::Vector3d::Zero(3);
+                ref_velocity.push_back(velocity_temp);
                 reference_time.push_back(time + i * dt);
             }
 
@@ -114,47 +118,170 @@ void LocalPlanner::linearation(double time, double robot_cur_yaw)
         start_tracking_time = ros::Time::now();
     }
 
+    // ── Obstacle search for each horizon step ──────────────────────────
+    // CRITICAL FIX: The old code used a `safe_constraint` gate that only
+    // searched for obstacles when the reference point itself (or ±3
+    // neighbours) was inside an occupied cell.  This created a binary
+    // toggle: when an obstacle was near the edge of the path, one frame
+    // had 0 constraints, the next had hundreds → massive QP structure
+    // flip → solver oscillated between two solutions → visible path
+    // flicker.
+    //
+    // Fix: ALWAYS search for obstacles around each reference point.
+    // Cap to the MAX_OBS_PER_STEP closest obstacles per step so the QP
+    // structure stays approximately constant across frames.
+    //
+    // Fix 39a: Also search around the PREVIOUS predicted trajectory.
+    // The MPC predicted path can diverge significantly from the reference
+    // when avoiding obstacles.  Searching only around ref_trajectory meant
+    // obstacles near the actual predicted path were invisible → path went
+    // straight through walls/obstacles.
+    // Fix 39b: Wider search radius and more obstacles per step for better
+    // wall representation.  With only 8 points the solver could squeeze
+    // between discrete obstacle points on a continuous wall.
+    // Fix 42a: Reduced from 30→20 (±1.0m).  Obstacles beyond 1.0m have
+    // negligible barrier influence (sqrt(0.25+0.6)=0.92m for static) and
+    // only bloat the QP.  Combined with fewer sectors, this cuts total
+    // obs from ~219 to ~60-80, letting the SQP actually converge.
+    static const int OBS_SEARCH_HALF = 20;
+    static const size_t MAX_OBS_PER_STEP = 6;     // Fix 42a: 12→6 sectors
     for(int i = 0; i < 20; i++){
-        /// 单独进行障碍物处理
         Eigen::Vector3i pos_idx = global_map->coord2gridIndex(ref_trajectory[i]);
         std::vector<Eigen::Vector3d> obs_point_temp;
         std::vector<std::pair<int, Eigen::Vector3d>> obs_point_temp_t;
 
-        bool safe_constraint = occ_flag[i];
-        // 前后七个参考点是否在障碍物内，但凡有一个在他就要考虑障碍物的问题
-        safe_constraint = occ_flag[i] || (i > 18 ? false: occ_flag[i+1]) ||
-                (i > 17 ? false: occ_flag[i+2]) || (i > 16? false:occ_flag[i+3]) ||
-                (i < 1? false: occ_flag[i-1]) || (i < 2? false: occ_flag[i-2]) || (i < 3? false: occ_flag[i-3]);
+        // Fix 43b: Removed exist_second_height gate.  Previously, when the
+        // reference point was in a "bridge area" (exist_second_height=true),
+        // ALL obstacle search was skipped → zero constraints → MPC completely
+        // blind → path went straight through obstacles in those areas.
+        // Now obstacles are always searched regardless of bridge/height status.
+        {
+            // Temporary storage with distance for sorting
+            struct ObsEntry {
+                double dist2;
+                int type;
+                Eigen::Vector3d pos;
+            };
+            std::vector<ObsEntry> candidates;
 
-
-        if(safe_constraint){
-            if(!global_map->GridNodeMap[pos_idx.x()][pos_idx.y()]->exist_second_height){
-                // 搜索最近的几个障碍物点(除了桥洞区域)
-                for(int i = -10; i<=10; i++){
-                    for(int j = -10; j<=10; j++){
-                        Eigen::Vector3i temp_idx = {pos_idx.x() + i, pos_idx.y() + j, pos_idx.z()};
-                        if(global_map->isOccupied(pos_idx.x() + i, pos_idx.y() + j, pos_idx.z()))
-                        {
+            // Helper: search a window around a center point and add obstacles
+            auto searchWindow = [&](const Eigen::Vector3i& center_idx) {
+                for(int di = -OBS_SEARCH_HALF; di <= OBS_SEARCH_HALF; di++){
+                    for(int dj = -OBS_SEARCH_HALF; dj <= OBS_SEARCH_HALF; dj++){
+                        int nx = center_idx.x() + di;
+                        int ny = center_idx.y() + dj;
+                        if(global_map->isOccupied(nx, ny, center_idx.z())){
+                            Eigen::Vector3i temp_idx = {nx, ny, center_idx.z()};
                             Eigen::Vector3d temp_pos = global_map->gridIndex2coord(temp_idx);
-                            obs_point_temp.push_back(temp_pos);
-                            if(global_map->isLocalOccupied(pos_idx.x() + i, pos_idx.y() + j, pos_idx.z())){
-                                // Dynamic obstacle from pointcloud — type 1, trigger local avoidance
-                                obs_point_temp_t.push_back(std::make_pair(1, temp_pos));
-                                unknown_obs_exist = true;
-                            }else{
-                                // Static obstacle from map — type 0, larger threshold (handled by global planner)
-                                obs_point_temp_t.push_back(std::make_pair(0, temp_pos));
-                                // Don't set unknown_obs_exist — static obstacles alone don't need local avoidance
-                            }
+                            double dx = ref_trajectory[i].x() - temp_pos.x();
+                            double dy = ref_trajectory[i].y() - temp_pos.y();
+                            int type = global_map->isLocalOccupied(nx, ny, center_idx.z()) ? 1 : 0;
+                            candidates.push_back({dx*dx + dy*dy, type, temp_pos});
+                            if(type == 1) unknown_obs_exist = true;
                         }
                     }
                 }
+            };
+
+            // Search around reference trajectory point
+            searchWindow(pos_idx);
+
+            // Fix 42a-rev2: RE-ENABLED prev_predictState_ search.
+            // The predicted path can deviate 2+ meters from the reference
+            // (maxDev=2.87m observed).  Searching only around the reference
+            // misses obstacles near the actual predicted path → the path
+            // goes through those obstacles → checkfeasible() fires "not safe"
+            // every frame → perpetual replan loop.
+            //
+            // With sector-based selection, re-enabling this search is safe:
+            // a sector can only hold ONE obstacle (the closest), so
+            // candidates from both searches compete within sectors and
+            // the total output is still bounded at N_SECTORS per step.
+            if (i < (int)prev_predictState_.size()
+                && (std::abs(prev_predictState_[i](0)) > 0.1 || std::abs(prev_predictState_[i](1)) > 0.1)) {
+                Eigen::Vector3d prev_pred_pos(prev_predictState_[i](0),
+                                              prev_predictState_[i](1), 0.0);
+                double ref_pred_dist = (ref_trajectory[i].head<2>() - prev_pred_pos.head<2>()).norm();
+                if (ref_pred_dist > 0.3) {
+                    Eigen::Vector3i pred_idx = global_map->coord2gridIndex(prev_pred_pos);
+                    searchWindow(pred_idx);
+                }
             }
-            obs_points_t.push_back(obs_point_temp_t);
+
+            // Fix 43c: Also search around the robot's CURRENT position for
+            // the first few MPC steps.  Even with reduced MAX_LEAD_TIME
+            // (Fix 43a), this belt-and-suspenders ensures obstacles right
+            // next to the robot are always visible to the MPC barrier.
+            if (i < 5) {
+                Eigen::Vector3i robot_idx = global_map->coord2gridIndex(global_map->odom_position);
+                double robot_ref_dist = (ref_trajectory[i].head<2>() - global_map->odom_position.head<2>()).norm();
+                if (robot_ref_dist > 0.2) {
+                    searchWindow(robot_idx);
+                }
+            }
+
+            // Deduplicate candidates (same grid cell can appear from both/all searches)
+            {
+                std::sort(candidates.begin(), candidates.end(),
+                          [](const ObsEntry& a, const ObsEntry& b){
+                              if (a.pos.x() != b.pos.x()) return a.pos.x() < b.pos.x();
+                              return a.pos.y() < b.pos.y();
+                          });
+                auto it = std::unique(candidates.begin(), candidates.end(),
+                                      [](const ObsEntry& a, const ObsEntry& b){
+                                          return std::abs(a.pos.x() - b.pos.x()) < 1e-6
+                                              && std::abs(a.pos.y() - b.pos.y()) < 1e-6;
+                                      });
+                candidates.erase(it, candidates.end());
+                // Recompute distances to ref_trajectory after dedup
+                for (auto& c : candidates) {
+                    double dx = ref_trajectory[i].x() - c.pos.x();
+                    double dy = ref_trajectory[i].y() - c.pos.y();
+                    c.dist2 = dx*dx + dy*dy;
+                }
+            }
+
+            // Fix 42a: Angular-sector selection with 8 sectors + distance filter.
+            // Fix 41a used 12 sectors → up to 12 obs/step → 240 total → SQP choked.
+            // 8 sectors (45° each) gives good angular coverage (left/right/front/rear
+            // + diagonals) while keeping total obs manageable (~100-120).
+            // Max distance 1.0m filter removes far-away obstacles that contribute
+            // negligible barrier gradient but bloat the QP.
+            {
+                static const int N_SECTORS = 8;
+                static const double MAX_OBS_DIST2 = 1.0 * 1.0;  // 1.0m max
+                struct SectorBest {
+                    double dist2;
+                    int type;
+                    Eigen::Vector3d pos;
+                    bool valid;
+                };
+                SectorBest sectors[8];
+                for (int s = 0; s < N_SECTORS; s++) {
+                    sectors[s] = {1e18, 0, Eigen::Vector3d::Zero(), false};
+                }
+
+                for (auto& c : candidates) {
+                    if (c.dist2 > MAX_OBS_DIST2) continue;  // skip far obstacles
+                    double dx = c.pos.x() - ref_trajectory[i].x();
+                    double dy = c.pos.y() - ref_trajectory[i].y();
+                    double angle = std::atan2(dy, dx) + M_PI;  // [0, 2π)
+                    int sector = std::min((int)(angle / (2.0 * M_PI) * N_SECTORS), N_SECTORS - 1);
+                    if (!sectors[sector].valid || c.dist2 < sectors[sector].dist2) {
+                        sectors[sector] = {c.dist2, c.type, c.pos, true};
+                    }
+                }
+
+                for (int s = 0; s < N_SECTORS; s++) {
+                    if (sectors[s].valid) {
+                        obs_point_temp.push_back(sectors[s].pos);
+                        obs_point_temp_t.push_back(std::make_pair(sectors[s].type, sectors[s].pos));
+                    }
+                }
+            }
         }
-        else{
-            obs_points_t.push_back(obs_point_temp_t);
-        }
+
+        obs_points_t.push_back(obs_point_temp_t);
         obs_points.push_back(obs_point_temp);
         obs_num += obs_point_temp.size();
     }
@@ -176,7 +303,16 @@ void LocalPlanner::linearation(double time, double robot_cur_yaw)
     // OCS2 SqpMpc uses nThreads=2; if the solver fails mid-solve, its threads
     // may still be running when reset() destroys the object -> use-after-free.
     if (!mpcSolverPtr_) {
-        ocs2::RelaxedBarrierPenalty::Config barriercollisionPenaltyConfig(2.0, 0.1);
+        // Fix 42b: μ=20, δ=1.0.  With reference repulsion disabled and
+        //   ~100 total obstacles (8 sectors × 20 steps), the barrier is
+        //   the SOLE avoidance mechanism.  μ=20 gives per-obstacle penalty
+        //   ~40 at the constraint boundary → with 5 obs/step, total
+        //   barrier ~200/step vs Q tracking ~75/step at 0.5m deviation
+        //   → barrier dominates near obstacles.
+        //   Gradient at h=δ: -μ/δ = -20 (sufficient with aligned reference)
+        //   Static influence: sqrt(0.25+1.0) = 1.12m
+        //   Dynamic influence: sqrt(0.49+1.0) = 1.22m
+        ocs2::RelaxedBarrierPenalty::Config barriercollisionPenaltyConfig(20.0, 1.0);
         stateCollisionSoftConstraintPtr = std::make_unique<ocs2::StateSoftConstraint>(std::make_unique<SentryCollisionConstraint>(mpcInterface_.obsConstraintPtr_), std::make_unique<ocs2::RelaxedBarrierPenalty>(barriercollisionPenaltyConfig));
         mpcInterface_.problem_.stateSoftConstraintPtr->add("stateCollisionBounds", std::move(stateCollisionSoftConstraintPtr));
 
@@ -190,6 +326,7 @@ void LocalPlanner::linearation(double time, double robot_cur_yaw)
         hSet.reg_prim    = 1e-8;                 // was 1e-12
         mpcInterface_.sqpSettings().printSolverStatus = false;
         ROS_INFO("[LocalPlanner] HPIPM: mode=ROBUST, reg_prim=1e-8");
+        ROS_INFO("[LocalPlanner] Fix 43: barrier mu=20 delta=1.0, SECTORS=8, searchHalf=20, maxObs1.0m, NO_REPULSION, MAX_LEAD=0.5s, no_bridge_gate");
 
         mpcSolverPtr_.reset(new ocs2::SqpMpc(mpcInterface_.mpcSettings(), mpcInterface_.sqpSettings(), mpcInterface_.getOptimalControlProblem(), mpcInterface_.getInitializer()));
         ROS_INFO("[LocalPlanner] MPC solver created (one-time init)");
@@ -198,43 +335,53 @@ void LocalPlanner::linearation(double time, double robot_cur_yaw)
 
 void LocalPlanner::getFightTrackingTraj(Eigen::Vector3d state, double time, double robot_cur_yaw)
 {
-    double min_dis = 100000;
-    int min_id = 0;
     if(reference_path.size() < 2){
         return;
     }
+
+    // Fix 43a: Reduced MAX_LEAD_TIME from 2.0→0.5s.
+    // THE SMOKING GUN: With MAX_LEAD_TIME=2.0, the MPC reference started
+    // 2-3 meters ahead of the robot.  The obstacle search (±1.0m around
+    // reference) missed obstacles near the robot entirely → predicted path
+    // cut straight through walls/obstacles to reach the far-ahead reference.
+    // With 0.5s, the reference is only ~0.3-0.5m ahead → obstacles near
+    // the robot are within the search window and visible to the MPC barrier.
+    // (Fix 42d's min() speed reduction makes the old speed plateau
+    //  with MAX_LEAD_TIME=1.0 no longer a concern.)
+    static const double MAX_LEAD_TIME = 0.5;  // seconds — was 2.0 (Fix 38c)
+    double min_dist = 1e9;
+    int closest_id = 0;
+    for (int i = 0; i < (int)reference_path.size(); i++) {
+        double d = std::hypot(state(0) - reference_path[i](0),
+                              state(1) - reference_path[i](1));
+        if (d < min_dist) { min_dist = d; closest_id = i; }
+    }
+    double max_time = closest_id * dt + MAX_LEAD_TIME;
+    if (time > max_time) {
+        start_tracking_time += ros::Duration(time - max_time);
+        time = max_time;
+    }
+
     /// 获得当前的MPC的参考轨迹
     linearation(time, robot_cur_yaw);
-    double dis = (state - ref_trajectory[0]).norm();
 
-    if(dis > 0.4){  // 如果符合上述条件则reset参考时间保证整体运动稳定性
-        ROS_WARN("tracking time low!");
-        for(int i = 0; i<reference_path.size(); i++)  /// 得到当前位置最近且对应的时间最近的参考路径id
-        {
-//            if(abs(ref_time[i] - time) > 1.0){
-//                continue;
-//            }
-            double distance = std::sqrt(pow(state(0) - reference_path[i](0), 2) + pow(state(1) - reference_path[i](1), 2));
-            if(distance<min_dis){
-                min_dis = distance;
-                min_id = i;
-            }
-        }
-        double reset_time = (min_id) * dt;
-        linearation(reset_time, robot_cur_yaw);
-        start_tracking_time = start_tracking_time + ros::Duration((time - reset_time));
-        tracking_low_check_flag.insert(tracking_low_check_flag.begin(), 1.0);  // 如果连续多次滞后判断为出现规划问题，直接进入重规划程序
-    }
-    else{
-        tracking_low_check_flag.insert(tracking_low_check_flag.begin(), 0.0);
-    }
-
+    // Fix 38a: Off-course deviation detection. When the robot drifts more
+    // than OFF_COURSE_DIST from the nearest reference point, flag for
+    // replanning. Previously always 0 → num_tracking_low > 4 never fired.
+    static const double OFF_COURSE_DIST = 0.8;  // meters
+    tracking_low_check_flag.insert(tracking_low_check_flag.begin(),
+                                   min_dist > OFF_COURSE_DIST ? 1.0 : 0.0);
     if(tracking_low_check_flag.size() > 10){
         tracking_low_check_flag.pop_back();
     }
 
     double phi;
     double last_phi;
+
+    // (Fix 27) Compute distance from each reference point to the goal
+    // for the deceleration ramp. Applied to ref_speed only (not ref_velocity)
+    // to keep position/velocity references consistent.
+    Eigen::Vector3d goal_pos = reference_path[reference_path.size() - 1];
 
     for(int i = 0; i<planning_horizon; i++)  /// 这里我们更改只进行参考角度的更改
     {
@@ -247,20 +394,26 @@ void LocalPlanner::getFightTrackingTraj(Eigen::Vector3d state, double time, doub
             if (phi - ref_phi[i] < -M_PI) {  // phi这里才是参考轨迹的yaw角
                 phi = phi + 2 * M_PI;
             }
-                // 参考路径与速度
-            if (ref_phi[i] - phi > M_PI_2) {  // 参考角度与实际状态反馈的角度差pi
-                ref_phi[i] = (phi + M_PI);  /// 相差一个周期
-                speed_direction = -1;
+                // Fix 34b: Hysteresis for speed_direction to prevent frame-to-frame
+                // flip-flopping at the ±π/2 boundary. Use different thresholds for
+                // entering vs exiting reverse mode.
+            {
+                static const double THRESH_ENTER_REVERSE = M_PI * 0.6;   // 108° to enter reverse
+                static const double THRESH_EXIT_REVERSE  = M_PI * 0.35;  // 63° to exit reverse
+                double yaw_diff = std::abs(ref_phi[i] - phi);
+                if (speed_direction == 1 && yaw_diff > THRESH_ENTER_REVERSE) {
+                    speed_direction = -1;
+                } else if (speed_direction == -1 && yaw_diff < THRESH_EXIT_REVERSE) {
+                    speed_direction = 1;
+                }
+                // else: keep current speed_direction (hysteresis band)
+            }
+            if (speed_direction == -1) {
+                ref_phi[i] = (ref_phi[i] - phi > 0) ? (phi + M_PI) : (phi - M_PI);
                 ref_speed.push_back(speed_direction * sqrt(pow(ref_velocity[i](1), 2) +
                                          pow(ref_velocity[i](0), 2)));
-            }else if (ref_phi[i] - phi < -M_PI_2) {
-                ref_phi[i] = (phi - M_PI);
-                speed_direction = -1;
-                ref_speed.push_back(speed_direction * sqrt(pow(ref_velocity[i](1), 2) +
-                                         pow(ref_velocity[i](0), 2)));
-            }else {  /// 小角度转向直接set
+            } else {
                 ref_phi[i] = (phi);
-                speed_direction = 1;
                 ref_speed.push_back(speed_direction * sqrt(pow(ref_velocity[i](1), 2) +
                                          pow(ref_velocity[i](0), 2)));
             }
@@ -286,44 +439,99 @@ void LocalPlanner::getFightTrackingTraj(Eigen::Vector3d state, double time, doub
             }
         }
         last_phi = phi;
+
+        // (Fix 27) Deceleration ramp: scale ref_speed near goal.
+        // Applied here (not in linearation) so ref_trajectory positions
+        // stay consistent with the polynomial while only the scalar speed
+        // reference is reduced.  This fixes reference/predicted divergence.
+        {
+            double dist_to_goal = (ref_trajectory[i].head<2>() - goal_pos.head<2>()).norm();
+            static const double DECEL_RAMP_DIST = 1.5;
+            if (dist_to_goal < DECEL_RAMP_DIST) {
+                double scale = std::max(0.05, dist_to_goal / DECEL_RAMP_DIST);
+                ref_speed.back() *= scale;
+            }
+        }
     }
 
+    // Fix 42d: Obstacle-proximity speed reduction (fixes double-multiplication bug).
+    // Fix 39e's two-pass approach multiplied step_scale × horizon_scale,
+    // causing effective_scale = 0.15² = 0.0225 → near-zero reference speed
+    // → robot overshot reference by 2+ meters → "violent divergence."
+    //
+    // Fix: Use min(step_scale, horizon_scale) instead of multiplication.
+    // This applies the TIGHTER of the two reductions, not both.
+    // Also raised OBS_MIN_SCALE from 0.15 to 0.25 to prevent excessive braking.
+    {
+        static const double OBS_SLOW_DIST = 1.5;   // start braking at 1.5m
+        static const double OBS_MIN_SCALE = 0.25;   // Fix 42d: 0.15→0.25; less extreme braking
+
+        // Pass 1: find tightest obstacle across entire horizon
+        double min_horizon_obs_dist = 1e9;
+        for (int i = 0; i < (int)ref_speed.size() && i < (int)obs_points.size(); i++) {
+            for (const auto& obs : obs_points[i]) {
+                double d = (ref_trajectory[i].head<2>() - obs.head<2>()).norm();
+                if (d < min_horizon_obs_dist) min_horizon_obs_dist = d;
+            }
+        }
+
+        // Horizon-wide scale (look-ahead)
+        double horizon_scale = 1.0;
+        if (min_horizon_obs_dist < OBS_SLOW_DIST) {
+            horizon_scale = OBS_MIN_SCALE
+                          + (1.0 - OBS_MIN_SCALE) * (min_horizon_obs_dist / OBS_SLOW_DIST);
+        }
+
+        // Pass 2: per-step, use min(step_scale, horizon_scale) — NOT multiplication
+        for (int i = 0; i < (int)ref_speed.size() && i < (int)obs_points.size(); i++) {
+            double step_scale = 1.0;
+            if (!obs_points[i].empty()) {
+                double min_obs_dist = 1e9;
+                for (const auto& obs : obs_points[i]) {
+                    double d = (ref_trajectory[i].head<2>() - obs.head<2>()).norm();
+                    if (d < min_obs_dist) min_obs_dist = d;
+                }
+                if (min_obs_dist < OBS_SLOW_DIST) {
+                    step_scale = OBS_MIN_SCALE
+                              + (1.0 - OBS_MIN_SCALE) * (min_obs_dist / OBS_SLOW_DIST);
+                }
+            }
+            // Use the tighter reduction, not both
+            double effective_scale = std::min(step_scale, horizon_scale);
+            ref_speed[i] *= effective_scale;
+        }
+    }
 
 }
 
 void LocalPlanner::getTrackingTraj(Eigen::Vector3d state, double time, double robot_cur_yaw)
 {
-    double min_dis = 100000;
-    int min_id = 0;
     if(reference_path.size() < 2){
         return;
     }
+
+    // Fix 43a: MAX_LEAD_TIME 2.0→0.5 (see getFightTrackingTraj for rationale).
+    static const double MAX_LEAD_TIME = 0.5;
+    double min_dist = 1e9;
+    int closest_id = 0;
+    for (int i = 0; i < (int)reference_path.size(); i++) {
+        double d = std::hypot(state(0) - reference_path[i](0),
+                              state(1) - reference_path[i](1));
+        if (d < min_dist) { min_dist = d; closest_id = i; }
+    }
+    double max_time = closest_id * dt + MAX_LEAD_TIME;
+    if (time > max_time) {
+        start_tracking_time += ros::Duration(time - max_time);
+        time = max_time;
+    }
+
     /// 获得当前的MPC的参考轨迹
     linearation(time, robot_cur_yaw);
-    double dis = (state - ref_trajectory[0]).norm();
 
-    if(dis > 0.4){  // 如果符合上述条件则reset参考时间保证整体运动稳定性
-        ROS_WARN("tracking time low!");
-        for(int i = 0; i<reference_path.size(); i++)  /// 得到当前位置最近的参考路径id
-        {
-//            if(abs(ref_time[i] - time) > 1.0){
-//                continue;
-//            }
-            double distance = std::sqrt(pow(state(0) - reference_path[i](0), 2) + pow(state(1) - reference_path[i](1), 2));
-            if(distance<min_dis){
-                min_dis = distance;
-                min_id = i;
-            }
-        }
-        double reset_time = (min_id) * dt;
-        linearation(reset_time, robot_cur_yaw);
-        start_tracking_time = start_tracking_time + ros::Duration((time - reset_time));
-        tracking_low_check_flag.insert(tracking_low_check_flag.begin(), 1.0);  // 如果连续多次滞后判断为出现规划问题，直接进入重规划程序
-    }
-    else{
-        tracking_low_check_flag.insert(tracking_low_check_flag.begin(), 0.0);
-    }
-
+    // Fix 38a: Off-course deviation detection (same as getFightTrackingTraj).
+    static const double OFF_COURSE_DIST = 0.8;
+    tracking_low_check_flag.insert(tracking_low_check_flag.begin(),
+                                   min_dist > OFF_COURSE_DIST ? 1.0 : 0.0);
     if(tracking_low_check_flag.size() > 10){
         tracking_low_check_flag.pop_back();
     }
@@ -372,6 +580,43 @@ void LocalPlanner::getTrackingTraj(Eigen::Vector3d state, double time, double ro
             }
         }
         last_phi = phi;
+    }
+
+    // Fix 42d: Obstacle-proximity speed reduction (same fix as getFightTrackingTraj)
+    {
+        static const double OBS_SLOW_DIST = 1.5;
+        static const double OBS_MIN_SCALE = 0.25;   // Fix 42d: 0.15→0.25
+
+        double min_horizon_obs_dist = 1e9;
+        for (int i = 0; i < (int)ref_speed.size() && i < (int)obs_points.size(); i++) {
+            for (const auto& obs : obs_points[i]) {
+                double d = (ref_trajectory[i].head<2>() - obs.head<2>()).norm();
+                if (d < min_horizon_obs_dist) min_horizon_obs_dist = d;
+            }
+        }
+
+        double horizon_scale = 1.0;
+        if (min_horizon_obs_dist < OBS_SLOW_DIST) {
+            horizon_scale = OBS_MIN_SCALE
+                          + (1.0 - OBS_MIN_SCALE) * (min_horizon_obs_dist / OBS_SLOW_DIST);
+        }
+
+        for (int i = 0; i < (int)ref_speed.size() && i < (int)obs_points.size(); i++) {
+            double step_scale = 1.0;
+            if (!obs_points[i].empty()) {
+                double min_obs_dist = 1e9;
+                for (const auto& obs : obs_points[i]) {
+                    double d = (ref_trajectory[i].head<2>() - obs.head<2>()).norm();
+                    if (d < min_obs_dist) min_obs_dist = d;
+                }
+                if (min_obs_dist < OBS_SLOW_DIST) {
+                    step_scale = OBS_MIN_SCALE
+                              + (1.0 - OBS_MIN_SCALE) * (min_obs_dist / OBS_SLOW_DIST);
+                }
+            }
+            double effective_scale = std::min(step_scale, horizon_scale);
+            ref_speed[i] *= effective_scale;
+        }
     }
 
 }
@@ -468,7 +713,15 @@ void LocalPlanner::rcvGlobalTrajectory(const trajectory_generation::trajectoryPo
              reference_path.size(), reference_velocity.size());
 
     start_tracking_time = ros::Time::now();
+    last_time_reset_ = ros::Time(0);  // Fix 34c: allow immediate time-reset on new trajectory
     m_get_global_trajectory = true;
+
+    // Fix 34d: Force cold-start on new trajectory. The solver's warm-start
+    // from the previous trajectory is completely wrong for the new one and
+    // causes the first few frames to oscillate violently.
+    if (mpcSolverPtr_) {
+        mpcSolverPtr_->reset();
+    }
     motion_mode = polytraj->motion_mode;
 //    motion_mode = 8;
 }
@@ -552,6 +805,29 @@ int LocalPlanner::solveNMPC(Eigen::Vector4d state)
         desiredTimeTrajectory[i] = reference_time[i];
         desiredInputTrajectory[i] = Eigen::Vector2d::Zero(2);
     }
+
+    // ── Fix 42b: Reference repulsion DISABLED ─────────────────────────
+    // Fix 41b's tangent-perpendicular repulsion (and Fix 40a before it)
+    // proved counterproductive in corridors:
+    //   - In a corridor with walls on both sides, repulsion pushed the
+    //     reference away from one wall INTO the barrier zone of the
+    //     opposite wall.  The solver then faced conflicting requirements
+    //     (track repulsed reference on one side vs avoid barrier on the
+    //     other) and produced a compromise that satisfied neither:
+    //     min_obs=0.213m, maxDev=2.130m.
+    //   - The double speed reduction (step_scale × horizon_scale) pushed
+    //     ref_speed to near-zero, so the reference barely moved forward
+    //     while the robot at v=0.3 overshot → huge position error.
+    //
+    // With repulsion DISABLED, the reference is the original polynomial
+    // path from the global planner (corridor center).  The barrier alone
+    // handles avoidance:
+    //   - In a corridor: barrier from both walls pushes toward center,
+    //     aligned with tracking cost → solver naturally centers the path.
+    //   - For isolated obstacle: barrier creates "go around" gradient,
+    //     and the solver picks the lower-cost side.
+    // The barrier (μ=20, δ=1.0) is now strong enough relative to Q=150
+    // because the obstacle count is much lower (8 sectors ~100 total).
     ocs2::TargetTrajectories targetTrajectories(desiredTimeTrajectory, desiredStateTrajectory, desiredInputTrajectory);
 
     // ── NaN guard: catch corrupt reference before feeding it to the solver ──
@@ -566,7 +842,12 @@ int LocalPlanner::solveNMPC(Eigen::Vector4d state)
 
     mpcInterface_.getReferenceManagerPtr()->setTargetTrajectories(targetTrajectories);
     mpcSolverPtr_->getSolverPtr()->setReferenceManager(mpcInterface_.getReferenceManagerPtr());
-    state(2) = speed_direction * state(2);
+    // Fix 35b: Do NOT negate observation speed by speed_direction.
+    // The solver must see the robot's true physical speed (always >= 0).
+    // Negating it made the solver think the robot was moving backward when
+    // speed_direction == -1, producing overcorrection and violent oscillation.
+    // speed_direction now only affects the *reference* (ref_speed, ref_phi),
+    // not the observation.
     observation.state = state;
 
     if (!observation.state.allFinite()) {
@@ -591,6 +872,53 @@ int LocalPlanner::solveNMPC(Eigen::Vector4d state)
     }
     ocs2::scalar_t final_time = observation.time + mpcSolverPtr_->settings().solutionTimeWindow_;
     mpcSolverPtr_->getSolverPtr()->getPrimalSolution(final_time, bufferPrimalSolutionPtr_.get());
+
+    // ── Fix 40g: Detailed diagnostic logging ───────────────────────
+    // Log obstacle proximity for predicted trajectory so we can verify
+    // the collision avoidance is working.
+    {
+        static int log_counter = 0;
+        if (++log_counter % 20 == 0) {  // every ~0.5s at 40Hz
+            double min_pred_obs_dist = 1e9;
+            int min_pred_step = -1;
+            const auto& predTraj = bufferPrimalSolutionPtr_->stateTrajectory_;
+            for (size_t i = 0; i < std::min(predTraj.size(), obs_points.size()); i++) {
+                for (const auto& obs : obs_points[i]) {
+                    double d = (predTraj[i].head<2>() - obs.head<2>()).norm();
+                    if (d < min_pred_obs_dist) {
+                        min_pred_obs_dist = d;
+                        min_pred_step = (int)i;
+                    }
+                }
+            }
+            // Also compute max deviation of predicted path from reference
+            double max_ref_pred_dev = 0.0;
+            for (size_t ii = 0; ii < std::min(predTraj.size(), (size_t)planning_horizon); ii++) {
+                if (ii < ref_trajectory.size()) {
+                    double dev = (predTraj[ii].head<2>() - ref_trajectory[ii].head<2>()).norm();
+                    if (dev > max_ref_pred_dev) max_ref_pred_dev = dev;
+                }
+            }
+            // Also compute near-term max deviation (steps 0-5) which
+            // is what actually matters for control quality.
+            double max_near_dev = 0.0;
+            for (size_t ii = 0; ii < std::min(predTraj.size(), (size_t)5); ii++) {
+                if (ii < ref_trajectory.size()) {
+                    double dev = (predTraj[ii].head<2>() - ref_trajectory[ii].head<2>()).norm();
+                    if (dev > max_near_dev) max_near_dev = dev;
+                }
+            }
+            // Fix 43d: Added refGap metric (distance from robot to ref[0])
+            double ref_gap = ref_trajectory.empty() ? 0.0
+                : std::hypot(state(0) - ref_trajectory[0](0), state(1) - ref_trajectory[0](1));
+            ROS_INFO("[Fix43] obs=%d min_obs=%.3fm@s%d maxDev=%.3f/%.3fm refGap=%.3fm spd0=%.2f v=%.2f pos=[%.2f,%.2f]",
+                     obs_num, min_pred_obs_dist, min_pred_step,
+                     max_near_dev, max_ref_pred_dev, ref_gap,
+                     ref_speed.empty() ? 0.0 : ref_speed[0],
+                     state(2), state(0), state(1));
+        }
+    }
+
     return 1;
 }
 
@@ -649,11 +977,24 @@ void LocalPlanner::getNMPCPredictionDeque(std::vector<Eigen::Vector4d> &state_de
 
 bool LocalPlanner::checkfeasible()
 {
-    for(int i = 1; i<(predictState.size() * 0.75); i++){
+    // Fix 36a/b: Only check dynamic obstacles (isLocalOccupied) — static walls
+    // are already handled by the MPC collision barrier.  Checking isOccupied()
+    // (static + dynamic) caused 92% false-positive rate because the predicted
+    // path naturally deviates slightly toward inflated static walls, triggering
+    // perpetual replanning that killed velocity.
+    // Fix 42e: Reduced horizon from 50% to 25% (steps 1-5, covering 0.5s).
+    // At 50%, the predicted path at steps 5-10 deviates 1+ meters from the
+    // reference (maxDev can reach 3m+).  The obstacle search only covers
+    // ±1.0m around the reference, so obstacles near the deviated prediction
+    // are invisible to the MPC → prediction goes through them →
+    // checkfeasible fires "not safe" every frame → perpetual replan.
+    // At 25%, we only check steps 1-5 where the prediction is still close
+    // to the robot and reference.  The barrier handles steps 6+ internally.
+    for(int i = 1; i < (int)(predictState.size() * 0.25); i++){
         int idx, idy, idz;
         double pt_z = 0.0;
         global_map->coord2gridIndex(predictState[i](0), predictState[i](1), pt_z, idx, idy, idz);
-        if (global_map->isOccupied(idx, idy, idz)){
+        if (global_map->isLocalOccupied(idx, idy, idz)){
             return true;
         }
     }

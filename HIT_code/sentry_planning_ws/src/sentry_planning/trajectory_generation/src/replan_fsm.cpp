@@ -45,6 +45,7 @@ void ReplanFSM::init(ros::NodeHandle &nh)
     vislization->init(nh);
     nh.param("trajectory_generator/robot_radius_dash", robot_radius_dash, 0.1);
     nh.param("trajectory_generator/robot_radius", robot_radius, 0.35);
+    last_replan_time = ros::Time::now();  // (Fix 30) init cooldown timer
 
     exeTimer = nh.createTimer(ros::Duration(0.03), &ReplanFSM::execFSMCallback, this);
     replan_flag_sub = nh.subscribe("/replan_flag", 1, &ReplanFSM::checkReplanCallback, this);
@@ -158,7 +159,7 @@ void ReplanFSM::rcvLidarIMUPosCallback(const nav_msgs::OdometryConstPtr &state)
     pose = state->pose.pose;
     robot_cur_position(0) = pose.position.x;
     robot_cur_position(1) = pose.position.y;
-    robot_cur_position(2) = pose.position.z - 0.2;
+    robot_cur_position(2) = 0.0;  // ground robot: Z is always ~0 (floor-normalized PCD)
 
     /* 使用转换公式获取实时姿态(yaw取-pi~pi) 这里的yaw轴姿态是雷达姿态，这里因为雷达固连在底盘上所以雷达的姿态就等于底盘姿态 */
     double x = pose.orientation.x;
@@ -349,6 +350,7 @@ void ReplanFSM::execFSMCallback(const ros::TimerEvent &e)
     if(sentryStatus == planningStatus::REPLAN_TRAJ){
         if(plannerManager->replanFinding(robot_cur_position, final_goal, robot_cur_speed)){
             sentryStatus = planningStatus::EXEC_TRAJ;
+            last_replan_time = ros::Time::now();  // (Fix 30) record replan time for cooldown
             trajectory_generation::trajectoryPoly global_path;
             global_path.motion_mode = decision_mode;
             double desired_time = 0.0;
@@ -390,6 +392,14 @@ void ReplanFSM::checkReplanCallback(const std_msgs::BoolConstPtr &msg)  //检查
     }
 
     if(msg->data == true){
+        // (Fix 30) Enforce 1.0s cooldown between replans to prevent path oscillation
+        // near dynamic obstacles. Without this, each replan creates a different
+        // PRM graph → different topological path → zigzag between solutions.
+        double elapsed = (ros::Time::now() - last_replan_time).toSec();
+        if(elapsed < 1.0){
+            ROS_INFO_THROTTLE(0.5, "[FSM] replan cooldown: %.1fs remaining", 1.0 - elapsed);
+            return;
+        }
         ROS_ERROR("[FSM] replan trajectory now !");
         if(!replan_flag){  /// 防止高频重复replan
             sentryStatus = planningStatus::REPLAN_TRAJ;

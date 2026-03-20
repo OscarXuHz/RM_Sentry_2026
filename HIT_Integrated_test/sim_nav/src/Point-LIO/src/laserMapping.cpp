@@ -1,6 +1,7 @@
 #include <omp.h>
 #include <mutex>
 #include <math.h>
+#include <algorithm>
 #include <thread>
 #include <fstream>
 #include <csignal>
@@ -9,6 +10,7 @@
 #include <so3_math.h>
 #include <ros/ros.h>
 #include <Eigen/Core>
+#include <Eigen/Eigenvalues>
 #include "IMU_Processing.hpp"
 #include <nav_msgs/Odometry.h>
 #include <nav_msgs/Path.h>
@@ -76,6 +78,255 @@ sensor_msgs::Imu::ConstPtr imu_last_ptr;
 nav_msgs::Path path;
 nav_msgs::Odometry odomAftMapped;
 geometry_msgs::PoseStamped msg_body_pose;
+
+bool normalize_floor_in_saved_map(PointCloudXYZI::Ptr cloud, double floor_quantile, double floor_target_z, int min_floor_points)
+{
+    if (!cloud || cloud->empty()) {
+        return false;
+    }
+
+    floor_quantile = std::max(0.01, std::min(0.5, floor_quantile));
+    min_floor_points = std::max(10, min_floor_points);
+
+    const int max_iterations = std::max(1, pcd_pca_max_iterations);
+    const double convergence_tilt_deg = 0.01;
+
+    // ====================================================================
+    // Robust floor normalization strategy:
+    //
+    // 1. Find a robust floor Z estimate using the MODE of the Z histogram
+    //    (the most populated Z bin), not a simple quantile that includes
+    //    outliers at Z=-50 or below.
+    // 2. Select floor inliers as points within ±inlier_band of floor_z,
+    //    rejecting extreme outliers.
+    // 3. Fit plane via PCA on clean inliers.
+    // 4. Rotate entire cloud around ORIGIN (not floor centroid) to align
+    //    floor normal with Z-axis.
+    // 5. Iterate with progressively tighter inlier bands.
+    // ====================================================================
+
+    int actual_passes = 0;
+
+    for (int iter = 0; iter < max_iterations; ++iter)
+    {
+        // --- Collect all finite Z values ---
+        std::vector<double> z_all;
+        z_all.reserve(cloud->points.size());
+        for (const auto& pt : cloud->points)
+        {
+            if (!std::isfinite(pt.x) || !std::isfinite(pt.y) || !std::isfinite(pt.z))
+                continue;
+            z_all.emplace_back(static_cast<double>(pt.z));
+        }
+
+        if (static_cast<int>(z_all.size()) < min_floor_points) {
+            ROS_WARN_STREAM("[pcd_save] iter " << iter << ": insufficient finite points=" << z_all.size());
+            return (iter > 0);
+        }
+
+        // --- Find robust floor Z estimate ---
+        // Use histogram mode: bin Z values and find the most populated bin
+        // in the lower half of the Z range (floor is low).
+        double z_min_val = *std::min_element(z_all.begin(), z_all.end());
+        double z_max_val = *std::max_element(z_all.begin(), z_all.end());
+        double z_range = z_max_val - z_min_val;
+
+        double floor_z_estimate;
+        if (z_range < 0.01) {
+            // Effectively flat — nothing to do
+            ROS_INFO_STREAM("[pcd_save] iter " << iter << ": Z range too small (" << z_range << " m), already level");
+            break;
+        }
+
+        // Use 5cm bins for histogram
+        const double bin_width = 0.05;
+        int n_bins = static_cast<int>(std::ceil(z_range / bin_width)) + 1;
+        n_bins = std::min(n_bins, 10000);
+        std::vector<int> hist(n_bins, 0);
+        for (double z : z_all) {
+            int bin = static_cast<int>((z - z_min_val) / bin_width);
+            bin = std::min(bin, n_bins - 1);
+            hist[bin]++;
+        }
+
+        // Find mode bin across the FULL Z range — the floor is the densest
+        // horizontal surface so it produces the most populated Z bin.
+        int mode_bin = 0;
+        int mode_count = 0;
+        for (int b = 0; b < n_bins; ++b) {
+            if (hist[b] > mode_count) {
+                mode_count = hist[b];
+                mode_bin = b;
+            }
+        }
+        floor_z_estimate = z_min_val + (mode_bin + 0.5) * bin_width;
+
+        // If mode has very few points, fall back to quantile median
+        if (mode_count < min_floor_points) {
+            std::vector<double> z_sorted = z_all;
+            size_t q_idx = static_cast<size_t>(floor_quantile * (z_sorted.size() - 1));
+            std::nth_element(z_sorted.begin(), z_sorted.begin() + q_idx, z_sorted.end());
+            // Take median of the quantile subset
+            std::vector<double> low_z(z_sorted.begin(), z_sorted.begin() + q_idx + 1);
+            size_t med_idx = low_z.size() / 2;
+            std::nth_element(low_z.begin(), low_z.begin() + med_idx, low_z.end());
+            floor_z_estimate = low_z[med_idx];
+        }
+
+        // --- Select floor inliers within band around floor_z_estimate ---
+        // Use wide band first (captures tilted floor), tighter for refinement
+        double inlier_band = (iter == 0) ? 0.50 : 0.10;  // ±50cm first pass, ±10cm refined
+        std::vector<Eigen::Vector3d> floor_pts;
+        floor_pts.reserve(z_all.size() / 4);
+        for (const auto& pt : cloud->points)
+        {
+            if (!std::isfinite(pt.x) || !std::isfinite(pt.y) || !std::isfinite(pt.z))
+                continue;
+            double dz = static_cast<double>(pt.z) - floor_z_estimate;
+            if (dz >= -inlier_band && dz <= inlier_band) {
+                floor_pts.emplace_back(pt.x, pt.y, pt.z);
+            }
+        }
+
+        if (static_cast<int>(floor_pts.size()) < min_floor_points) {
+            ROS_WARN_STREAM("[pcd_save] iter " << iter << ": insufficient floor inliers="
+                            << floor_pts.size() << " (floor_z_est=" << floor_z_estimate
+                            << ", band=±" << inlier_band << ")");
+            return (iter > 0);
+        }
+
+        // --- PCA on clean floor inliers ---
+        Eigen::Vector3d centroid = Eigen::Vector3d::Zero();
+        for (const auto& p : floor_pts) centroid += p;
+        centroid /= static_cast<double>(floor_pts.size());
+
+        Eigen::Matrix3d cov = Eigen::Matrix3d::Zero();
+        for (const auto& p : floor_pts)
+        {
+            Eigen::Vector3d d = p - centroid;
+            cov += d * d.transpose();
+        }
+        cov /= static_cast<double>(floor_pts.size());
+
+        Eigen::SelfAdjointEigenSolver<Eigen::Matrix3d> eig(cov);
+        if (eig.info() != Eigen::Success) {
+            ROS_WARN("[pcd_save] eigen decomposition failed");
+            return (iter > 0);
+        }
+
+        Eigen::Vector3d floor_normal = eig.eigenvectors().col(0);
+        if (floor_normal.z() < 0.0) floor_normal = -floor_normal;
+
+        double tilt_rad = std::acos(std::min(1.0, std::abs(floor_normal.z())));
+        double tilt_deg = tilt_rad * 180.0 / M_PI;
+
+        ROS_INFO_STREAM("[pcd_save] PCA iter " << iter << ": normal=["
+                        << floor_normal.x() << ", " << floor_normal.y() << ", " << floor_normal.z()
+                        << "] tilt=" << tilt_deg << " deg"
+                        << " floor_pts=" << floor_pts.size()
+                        << " floor_z_est=" << floor_z_estimate
+                        << " band=±" << inlier_band << "m");
+
+        if (tilt_deg < convergence_tilt_deg) {
+            ROS_INFO_STREAM("[pcd_save] converged at iter " << iter
+                            << ": residual tilt " << tilt_deg << " deg");
+            actual_passes = iter;
+            break;
+        }
+
+        // --- Rotate entire cloud around ORIGIN to level the floor ---
+        // Rotating around the origin preserves the coordinate system.
+        Eigen::Quaterniond q_align = Eigen::Quaterniond::FromTwoVectors(floor_normal, Eigen::Vector3d::UnitZ());
+        Eigen::Matrix3d R = q_align.toRotationMatrix();
+
+        for (auto& pt : cloud->points)
+        {
+            if (!std::isfinite(pt.x) || !std::isfinite(pt.y) || !std::isfinite(pt.z))
+                continue;
+            Eigen::Vector3d p(pt.x, pt.y, pt.z);
+            p = R * p;
+            pt.x = static_cast<float>(p.x());
+            pt.y = static_cast<float>(p.y());
+            pt.z = static_cast<float>(p.z());
+        }
+
+        actual_passes = iter + 1;
+    }
+
+    // --- Z-shift: place floor at target_z ---
+    // Re-detect floor with the same robust method for Z-shift
+    std::vector<double> z_all;
+    z_all.reserve(cloud->points.size());
+    for (const auto& pt : cloud->points)
+    {
+        if (!std::isfinite(pt.x) || !std::isfinite(pt.y) || !std::isfinite(pt.z))
+            continue;
+        z_all.emplace_back(static_cast<double>(pt.z));
+    }
+
+    if (z_all.empty()) {
+        ROS_WARN("[pcd_save] empty point cloud after rotation");
+        return false;
+    }
+
+    // Histogram mode (global) for robust floor Z after rotation
+    double z_min_val = *std::min_element(z_all.begin(), z_all.end());
+    double z_max_val = *std::max_element(z_all.begin(), z_all.end());
+    double z_range = z_max_val - z_min_val;
+    const double bin_width = 0.05;
+    int n_bins = static_cast<int>(std::ceil(z_range / bin_width)) + 1;
+    n_bins = std::min(n_bins, 10000);
+    std::vector<int> hist(n_bins, 0);
+    for (double z : z_all) {
+        int bin = static_cast<int>((z - z_min_val) / bin_width);
+        bin = std::min(bin, n_bins - 1);
+        hist[bin]++;
+    }
+    int mode_bin = 0;
+    int mode_count = 0;
+    for (int b = 0; b < n_bins; ++b) {
+        if (hist[b] > mode_count) {
+            mode_count = hist[b];
+            mode_bin = b;
+        }
+    }
+    double floor_z_est = z_min_val + (mode_bin + 0.5) * bin_width;
+
+    // Collect floor points near mode for accurate median
+    std::vector<double> floor_z;
+    floor_z.reserve(z_all.size() / 4);
+    for (const auto& pt : cloud->points)
+    {
+        if (!std::isfinite(pt.z)) continue;
+        double dz = static_cast<double>(pt.z) - floor_z_est;
+        if (dz >= -0.15 && dz <= 0.15)
+            floor_z.emplace_back(static_cast<double>(pt.z));
+    }
+
+    if (floor_z.empty()) {
+        // Fallback: use quantile
+        size_t q_idx = static_cast<size_t>(floor_quantile * (z_all.size() - 1));
+        std::nth_element(z_all.begin(), z_all.begin() + q_idx, z_all.end());
+        floor_z.assign(z_all.begin(), z_all.begin() + q_idx + 1);
+    }
+
+    size_t median_idx = floor_z.size() / 2;
+    std::nth_element(floor_z.begin(), floor_z.begin() + median_idx, floor_z.end());
+    const double floor_median = floor_z[median_idx];
+    const double z_shift = floor_target_z - floor_median;
+
+    for (auto& pt : cloud->points)
+    {
+        if (!std::isfinite(pt.z)) continue;
+        pt.z = static_cast<float>(static_cast<double>(pt.z) + z_shift);
+    }
+
+    ROS_INFO_STREAM("[pcd_save] floor normalization complete: z_shift=" << z_shift
+                    << " target_z=" << floor_target_z
+                    << " floor_median=" << floor_median
+                    << " (" << actual_passes << "/" << max_iterations << " PCA passes)");
+    return true;
+}
 
 void SigHandle(int sig)
 {
@@ -622,7 +873,14 @@ void publish_frame_world(const ros::Publisher & pubLaserCloudFullRes)
         if (pcl_wait_save->size() > 0 && pcd_save_interval > 0  && scan_wait_num >= pcd_save_interval)
         {
             pcd_index ++;
-            string all_points_dir(string(string(ROOT_DIR) + "PCD/scans_") + to_string(pcd_index) + string(".pcd"));
+            std::string base_dir = std::string(ROOT_DIR) + "PCD/";
+            if (!pcd_save_output_path.empty()) {
+                size_t slash = pcd_save_output_path.find_last_of('/');
+                if (slash != std::string::npos) {
+                    base_dir = pcd_save_output_path.substr(0, slash + 1);
+                }
+            }
+            string all_points_dir(base_dir + string("scans_") + to_string(pcd_index) + string(".pcd"));
             pcl::PCDWriter pcd_writer;
             cout << "current scan saved to /PCD/" << all_points_dir << endl;
             pcd_writer.writeBinary(all_points_dir, *pcl_wait_save);
@@ -1367,10 +1625,20 @@ int main(int argc, char** argv)
     /* 2. noted that pcd save will influence the real-time performences **/
     if (pcl_wait_save->size() > 0 && pcd_save_en)
     {
-        string file_name = string("scans.pcd");
-        string all_points_dir(string(string(ROOT_DIR) + "PCD/") + file_name);
+        string all_points_dir;
+        if (pcd_save_output_path.empty()) {
+            all_points_dir = string(string(ROOT_DIR) + "PCD/scans.pcd");
+        } else {
+            all_points_dir = pcd_save_output_path;
+        }
+
+        if (pcd_level_floor) {
+            normalize_floor_in_saved_map(pcl_wait_save, pcd_floor_quantile, pcd_floor_target_z, pcd_floor_min_points);
+        }
+
         pcl::PCDWriter pcd_writer;
         pcd_writer.writeBinary(all_points_dir, *pcl_wait_save);
+        ROS_INFO_STREAM("[pcd_save] final map saved to " << all_points_dir << " (points=" << pcl_wait_save->size() << ")");
     }
     fout_out.close();
     fout_imu_pbp.close();

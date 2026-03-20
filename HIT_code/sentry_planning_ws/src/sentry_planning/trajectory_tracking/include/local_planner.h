@@ -111,10 +111,12 @@ private:
     double rho_;
     double rhoN_;
     std::vector<Eigen::Vector4d> predictState;  /// 求解结果
+    std::vector<Eigen::Vector4d> prev_predictState_;  // Fix 39a: previous cycle's predicted trajectory for obstacle search
     std::vector<Eigen::Vector2d> predictInput;
     Eigen::Vector4d state_observe;
     std::string occ_file_path;
     double speed_direction = 1;
+    ros::Time last_time_reset_;  // Fix 34c: cooldown timer for tracking-low time-resets
 
 
     Eigen::Matrix<double, n, n> state_transition; /// 离散状态转移矩阵

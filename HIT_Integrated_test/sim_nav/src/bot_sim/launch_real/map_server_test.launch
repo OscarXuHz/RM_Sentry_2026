@@ -1,7 +1,7 @@
 <launch>
     <param name="use_sim_time" value="false"/>
-    <arg name="map" default="Dec24.yaml" />
-    <node name="map_server" pkg="map_server" type="map_server" args="$(find bot_sim)/map/$(arg map)"/>
+    <arg name="map" default="/home/sentry_train_test/AstarTraining/HIT_Integrated_test/pcd/current.yaml" />
+    <node name="map_server" pkg="map_server" type="map_server" args="$(arg map)"/>
     <!-- <include file="$(find bot_sim)/launch_real/amcl_real.launch" /> -->
     <!-- <node pkg="rviz" type="rviz" name="rviz" /> -->
 

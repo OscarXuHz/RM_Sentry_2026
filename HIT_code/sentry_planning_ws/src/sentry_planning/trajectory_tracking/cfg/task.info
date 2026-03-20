@@ -3,7 +3,7 @@ sqp
 {
   nThreads                              2
   dt                                    0.1
-  sqpIteration                          10
+  sqpIteration                          12   ; Fix 42e: 10→12; more iterations for better convergence with barrier constraints
   inequalityConstraintMu                0.1
   inequalityConstraintDelta             0.2
   useFeedbackPolicy                     true
@@ -49,23 +49,23 @@ initialState
 ; standard state weight matrix
 Q
 {
-    (0,0)   80.0    ; x
-    (1,1)   80.0    ; y
-    (2,2)   15.0    ; v (was 0.0 - enables velocity tracking)
-    (3,3)   70.0    ; yaw
+    (0,0)   150.0   ; x (was 80; increased to tighten position tracking)
+    (1,1)   150.0   ; y
+    (2,2)   60.0    ; v (was 0.0 - enables velocity tracking)
+    (3,3)   80.0    ; yaw
 }
 
 ; control weight matrix
 R
 {
-    (0,0)   1.5     ; a (was 0.2 - penalizes jerk)
-    (1,1)   0.1     ; omega
+    (0,0)   1.5     ; a (Fix 33e: restored from 1.0; lower R was too aggressive, causing oscillation)
+    (1,1)   0.15    ; omega (was 0.5→0.15; mild smoothing only)
 }
 
 Q_final
 {
-    (0,0)   80.0    ; x
-    (1,1)   80.0    ; y
-    (2,2)   15.0    ; v
+    (0,0)   150.0   ; x (was 80)
+    (1,1)   150.0   ; y
+    (2,2)   60.0    ; v
     (3,3)   80.0    ; yaw
 }

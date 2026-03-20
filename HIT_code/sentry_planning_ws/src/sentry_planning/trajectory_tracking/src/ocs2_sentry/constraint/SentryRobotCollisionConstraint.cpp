@@ -44,9 +44,11 @@ ocs2::vector_t SentryCollisionConstraint::getValue(ocs2::scalar_t time, const oc
         Eigen::Vector3d obs_point = obs[i].second;
         double distance = std::pow(state[0] - obs_point[0], 2) + std::pow(state[1] - obs_point[1], 2);
         if(obs[i].first == 1){
-            constraintValue[i] = distance - distance_threshold_;
+            // Dynamic obstacle: larger clearance (0.5m effective) for moving objects
+            constraintValue[i] = distance - distance_threshold_dynamic_;
         }else if(obs[i].first == 0){
-            constraintValue[i] = distance - distance_threshold_ - 0.15;
+            // Static wall: standard threshold (0.3m effective)
+            constraintValue[i] = distance - distance_threshold_;
         }
     }
 

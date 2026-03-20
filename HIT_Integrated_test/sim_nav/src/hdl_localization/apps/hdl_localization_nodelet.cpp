@@ -274,7 +274,7 @@ private:
       publish_scan_matching_status(points_msg->header, aligned);
     }
 
-    publish_odometry(points_msg->header.stamp, pose_estimator->matrix());
+    publish_odometry(points_msg->header.stamp, pose_estimator->matrix(), pose_estimator->vel());
   }
 
   /**
@@ -392,7 +392,17 @@ private:
    * @param stamp  timestamp
    * @param pose   odometry pose to be published
    */
-  void publish_odometry(const ros::Time& stamp, const Eigen::Matrix4f& pose) {
+  void publish_odometry(const ros::Time& stamp, const Eigen::Matrix4f& raw_pose, const Eigen::Vector3f& ukf_vel) {
+    // ── Fix 33c: Soft Z constraint ──
+    // The PCD floor was shifted to z=0 (level_floor: true in avia.yaml).
+    // The LiDAR is mounted ~0.3m above ground (init_pos_z parameter).
+    // NDT struggles with z because the ground filter removes floor points.
+    // We allow NDT z within ±0.15m of init_pos_z, preventing floor sink.
+    Eigen::Matrix4f pose = raw_pose;
+    float z_center = static_cast<float>(private_nh.param<double>("init_pos_z", 0.0));
+    float z_tolerance = 0.15f;
+    pose(2, 3) = std::max(z_center - z_tolerance, std::min(z_center + z_tolerance, pose(2, 3)));
+
     // broadcast the transform over tf
     if(tf_buffer.canTransform(robot_odom_frame_id, odom_child_frame_id, ros::Time(0))) {
       geometry_msgs::TransformStamped map_wrt_frame = tf2::eigenToTransform(Eigen::Isometry3d(pose.inverse().cast<double>()));
@@ -432,8 +442,9 @@ private:
 
     tf::poseEigenToMsg(Eigen::Isometry3d(pose.cast<double>()), odom.pose.pose);
     odom.child_frame_id = odom_child_frame_id;
-    odom.twist.twist.linear.x = 0.0;
-    odom.twist.twist.linear.y = 0.0;
+    odom.twist.twist.linear.x = ukf_vel[0];
+    odom.twist.twist.linear.y = ukf_vel[1];
+    odom.twist.twist.linear.z = ukf_vel[2];
     odom.twist.twist.angular.z = 0.0;
 
     pose_pub.publish(odom);

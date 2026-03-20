@@ -154,11 +154,11 @@ void Vislization::visFinalPath(std::vector <Eigen::Vector3d> nodes) {
         Eigen::Vector3d coord = nodes[i];
         pt.x = coord(0);
         pt.y = coord(1);
-        pt.z = coord(2);
+        pt.z = 0.0;  // Fix 35a: flatten to ground plane
 
         neigh_pt.x = nodes[i+1](0);
         neigh_pt.y = nodes[i+1](1);
-        neigh_pt.z = nodes[i+1](2);
+        neigh_pt.z = 0.0;  // Fix 35a
 
         line_strip.points.push_back(pt);
         line_strip.points.push_back(neigh_pt);
@@ -355,12 +355,12 @@ void Vislization::visTopoPath(std::vector<std::vector<Eigen::Vector3d>> path)
             geometry_msgs::Point pt, neigh_pt;
             pt.x = path[i][j](0);
             pt.y = path[i][j](1);
-            pt.z = path[i][j](2) * 2;
+            pt.z = 0.0;  // Fix 35a: flatten to ground plane (BEV height created two-layer visual artifact)
             node_vis.points.push_back(pt);
 
             neigh_pt.x = path[i][j+1](0);
             neigh_pt.y = path[i][j+1](1);
-            neigh_pt.z = path[i][j+1](2);
+            neigh_pt.z = 0.0;  // Fix 35a
 
             line_strip.points.push_back(pt);
             line_strip.points.push_back(neigh_pt);
@@ -393,7 +393,7 @@ void Vislization::visTopoPointGuard(std::vector<GraphNode::Ptr> global_graph)
 
     node_vis.scale.x = 0.05;
     node_vis.scale.y = 0.05;
-    node_vis.scale.z = 0.5;
+    node_vis.scale.z = 0.05;
 
     line_strip.header.frame_id = "map";
     line_strip.header.stamp = ros::Time::now();
@@ -425,14 +425,14 @@ void Vislization::visTopoPointGuard(std::vector<GraphNode::Ptr> global_graph)
         geometry_msgs::Point pt;
         pt.x = (*iter)->pos(0);
         pt.y = (*iter)->pos(1);
-        pt.z = (*iter)->pos(2) * 2;
+        pt.z = 0.0;  // Fix 35a: flatten to ground plane
         node_vis.points.push_back(pt);
 
         for(int j = 0; j < (*iter)->neighbors.size();j++){
             geometry_msgs::Point neigh_pt;
             neigh_pt.x = (*iter)->neighbors[j]->pos(0);
             neigh_pt.y = (*iter)->neighbors[j]->pos(1);
-            neigh_pt.z = (*iter)->neighbors[j]->pos(2) * 2;
+            neigh_pt.z = 0.0;  // Fix 35a
             line_strip.points.push_back(pt);
             line_strip.points.push_back(neigh_pt);
         }
@@ -441,7 +441,7 @@ void Vislization::visTopoPointGuard(std::vector<GraphNode::Ptr> global_graph)
             geometry_msgs::Point neigh_pt;
             neigh_pt.x = (*iter)->neighbors_but_noconnected[j]->pos(0);
             neigh_pt.y = (*iter)->neighbors_but_noconnected[j]->pos(1);
-            neigh_pt.z = (*iter)->neighbors_but_noconnected[j]->pos(2);
+            neigh_pt.z = 0.0;  // Fix 35a
         }
     }
     topo_position_guard_vis_pub.publish(node_vis);
@@ -470,7 +470,7 @@ void Vislization::visTopoPointConnection(std::vector<GraphNode::Ptr> global_grap
 
     node_vis.scale.x = 0.03;
     node_vis.scale.y = 0.03;
-    node_vis.scale.z = 0.5;
+    node_vis.scale.z = 0.03;
 
     line_strip.header.frame_id = "map";
     line_strip.header.stamp = ros::Time::now();
@@ -520,7 +520,7 @@ void Vislization::visTopoPointConnection(std::vector<GraphNode::Ptr> global_grap
         geometry_msgs::Point pt;
         pt.x = (*iter)->pos(0);
         pt.y = (*iter)->pos(1);
-        pt.z = (*iter)->pos(2) * 2;
+        pt.z = 0.0;  // Fix 35a: flatten to ground plane
 
 
         for(int j = 0; j < (*iter)->neighbors.size();j++){
@@ -530,7 +530,7 @@ void Vislization::visTopoPointConnection(std::vector<GraphNode::Ptr> global_grap
             geometry_msgs::Point neigh_pt;
             neigh_pt.x = (*iter)->neighbors[j]->pos(0);
             neigh_pt.y = (*iter)->neighbors[j]->pos(1);
-            neigh_pt.z = (*iter)->neighbors[j]->pos(2) * 2;
+            neigh_pt.z = 0.0;  // Fix 35a
             line_strip.points.push_back(pt);
             line_strip.points.push_back(neigh_pt);
         }
@@ -542,7 +542,7 @@ void Vislization::visTopoPointConnection(std::vector<GraphNode::Ptr> global_grap
             geometry_msgs::Point neigh_pt;
             neigh_pt.x = (*iter)->neighbors[j]->pos(0);
             neigh_pt.y = (*iter)->neighbors[j]->pos(1);
-            neigh_pt.z = (*iter)->neighbors[j]->pos(2) * 2;
+            neigh_pt.z = 0.0;  // Fix 35a
             line_strip2.points.push_back(pt);
             line_strip2.points.push_back(neigh_pt);
         }

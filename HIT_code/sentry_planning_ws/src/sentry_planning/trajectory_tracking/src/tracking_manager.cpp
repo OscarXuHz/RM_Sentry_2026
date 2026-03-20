@@ -265,27 +265,22 @@ void tracking_manager::rcvLidarIMUPosCallback(const nav_msgs::OdometryConstPtr &
     double robot_add_yaw = 0.0;  // TODO 这里可能会有点问题，在非陀螺模式下不保证底盘一定在+-180度内，如果出现异常情况的话会疯转
     double robot_lidar_yaw = atan2f(siny_cosp, cosy_cosp);
 
-    // Correct LiDAR (aft_mapped) position to chassis / gimbal centre.
-    // chassis_pos = lidar_pos + R(lidar_yaw) * [DX, DY]
-    static constexpr double LIDAR_TO_CHASSIS_DX = -0.011;    // [m] LiDAR→chassis in LiDAR x
-    static constexpr double LIDAR_TO_CHASSIS_DY = -0.17166;  // [m] LiDAR→chassis in LiDAR y
-    double chassis_x = pose.position.x
-                       + std::cos(robot_lidar_yaw) * LIDAR_TO_CHASSIS_DX
-                       - std::sin(robot_lidar_yaw) * LIDAR_TO_CHASSIS_DY;
-    double chassis_y = pose.position.y
-                       + std::sin(robot_lidar_yaw) * LIDAR_TO_CHASSIS_DX
-                       + std::cos(robot_lidar_yaw) * LIDAR_TO_CHASSIS_DY;
-
-    robot_cur_position(0) = chassis_x;
-    robot_cur_position(1) = chassis_y;
+    // Fix 37: Use raw aft_mapped (LiDAR) position — NO chassis offset.
+    // trajectory_generation generates the reference polynomial in aft_mapped
+    // coordinates (replan_fsm.cpp uses raw pose.position with no offset).
+    // Applying a LiDAR→chassis offset here puts the MPC observation in a
+    // different frame from the reference, causing systematic tracking error
+    // and the predicted path diverging from the reference path.
+    robot_cur_position(0) = pose.position.x;
+    robot_cur_position(1) = pose.position.y;
     robot_cur_position(2) = 0.0;
 
-    global_map->odom_position(0) = chassis_x;
-    global_map->odom_position(1) = chassis_y;
+    global_map->odom_position(0) = pose.position.x;
+    global_map->odom_position(1) = pose.position.y;
     global_map->odom_position(2) = pose.position.z;
 
-    double robot_x = chassis_x;
-    double robot_y = chassis_y;
+    double robot_x = pose.position.x;
+    double robot_y = pose.position.y;
 
     double robot_yaw_temp;
     if (has_wheel_state_) {
@@ -363,12 +358,12 @@ void tracking_manager::rcvLidarIMUPosCallback(const nav_msgs::OdometryConstPtr &
     }
 
     double target_distance = (localplanner->target_point - robot_cur_position).norm();
-    // Pre-emptive replan: request next trajectory before stopping so stop gap is minimal.
-    if(target_distance < 1.0 && !arrival_goal && (localplanner->motion_mode != 8)){
-        replan_now = true;
-    }
-    if(target_distance < 0.1 && (localplanner->motion_mode != 8)){
-        ROS_WARN("[MPC] arrival_goal!");
+    // (Fix 22) Removed pre-emptive replan at 1.0m — it restarted motion near goal
+    // causing oscillation. Replan is still triggered by checkReplanFlag() if needed.
+    if(target_distance < 0.3 && (localplanner->motion_mode != 8)){
+        // (Fix 22) Increased from 0.1m to 0.3m — old threshold was far below stopping
+        // distance (v²/2a = 2.0²/7.0 ≈ 0.57m), causing consistent overshoot.
+        ROS_WARN("[MPC] arrival_goal! dist=%.2f", target_distance);
         arrival_goal = true;
     }
 
@@ -402,7 +397,8 @@ void tracking_manager::rcvLidarIMUPosCallback(const nav_msgs::OdometryConstPtr &
         vislization_util->publishMPCReferencePath(localplanner->ref_trajectory);
 
         replan_check_flag.insert(replan_check_flag.begin(), collision);
-        if(replan_check_flag.size() > 25){  // 检测num帧的数据防止碰撞，实际检测秒数为num/100帧
+        if(replan_check_flag.size() > 30){  // (Fix 30) was 15 (Fix 23); widened to 30 to reduce
+                                            // oscillation near dynamic obstacles (0.3s window)
             replan_check_flag.pop_back();
         }
         }
@@ -673,15 +669,51 @@ int tracking_manager::checkMotionMode(){
 }
 
 void tracking_manager::checkReplanFlag(){
+    // Fix 38b: Track when the last trajectory was received for periodic replan.
+    static ros::Time last_traj_time = ros::Time::now();
     if(localplanner->m_get_global_trajectory){
         replan_check_flag.clear();
         localplanner->m_get_global_trajectory = false;
+        last_traj_time = ros::Time::now();
     }
     int num_collision_error = accumulate(replan_check_flag.begin(), replan_check_flag.end(), 0);
     int num_tracking_low = accumulate(localplanner->tracking_low_check_flag.begin(), localplanner->tracking_low_check_flag.end(), 0);
     std_msgs::Bool replan_flag;
 
-    if(num_collision_error > 100 || num_tracking_low > 6 || replan_now){  // 实车参数为15，这里200为仿真参数
+    // Fix 38b: Periodic replan every 5s to handle cleared obstacles.
+    // When a dynamic obstacle moves away, the old detour path stays active
+    // because checkfeasible() only triggers replan on collision (not on
+    // "path is now suboptimal").  Periodic replan lets trajectory_generation
+    // find a shorter path through the now-clear area.
+    static const double PERIODIC_REPLAN_SEC = 5.0;
+    bool periodic_replan = false;
+    if (!arrival_goal && (ros::Time::now() - last_traj_time).toSec() > PERIODIC_REPLAN_SEC) {
+        periodic_replan = true;
+        last_traj_time = ros::Time::now();
+        ROS_INFO("[Fix 38b] Periodic replan triggered (%.1fs since last trajectory)", PERIODIC_REPLAN_SEC);
+    }
+
+    if(num_collision_error > 25 || num_tracking_low > 4 || replan_now || periodic_replan){
+        // Fix 42c: Break the perpetual replan cycle.
+        // When MPC path goes through obstacles, checkfeasible() fires every
+        // frame → num_collision_error hits 25 in ~0.6s → replan → new
+        // trajectory → MPC restarts cold → same problem → replan again.
+        // This positive feedback loop prevents the MPC from ever stabilizing.
+        //
+        // Fix: After receiving a new trajectory, give the MPC 3 seconds to
+        // settle before allowing collision-triggered replanning.  Off-course
+        // detection and periodic replan still work during cooldown.
+        double time_since_traj = (ros::Time::now() - last_traj_time).toSec();
+        bool collision_replan_ok = time_since_traj > 3.0;
+        bool is_collision_only_trigger = (num_collision_error > 25)
+                                       && !(num_tracking_low > 4)
+                                       && !replan_now && !periodic_replan;
+        if (is_collision_only_trigger && !collision_replan_ok) {
+            // Skip collision-triggered replan during cooldown
+            replan_flag.data = false;
+            global_replan_pub.publish(replan_flag);
+            return;
+        }
         ROS_ERROR("need to replan now !!");
         planningMode = planningType::FASTMOTION;
         replan_flag.data = true;
@@ -706,11 +738,16 @@ void tracking_manager::checkMotionNormal(double line_speed)
     speed_check.insert(speed_check.begin(), line_speed);
     double tracking_time = (ros::Time::now() - start_checking_time).toSec();
     double max_speed = 1.0;
-    if(tracking_time > 1.2){  // 限制两秒钟的速度序列
+    // Fix 35d: Tightened DISPENSE stuck-detection thresholds.
+    // Old: tracking_time > 1.2, max_speed < 0.3, average_speed < 0.1
+    // These triggered during MPC oscillation (sign-flipping speeds near zero)
+    // and made DISPENSE reverse v_ctrl, causing a vicious feedback loop.
+    // New: require 2.0s of truly stuck motion (max < 0.15, avg < 0.05).
+    if(tracking_time > 2.0){
         speed_check.pop_back();
         max_speed = *max_element(speed_check.begin(), speed_check.end());
         double average_speed = std::accumulate(speed_check.begin(), speed_check.end(), 0.0) / speed_check.size();
-        if(max_speed < 0.8 && !arrival_goal && average_speed < 0.3){
+        if(max_speed < 0.15 && !arrival_goal && average_speed < 0.05){
 //            ROS_ERROR("dispense form now!");
             if(planningMode != planningType::DISPENSE){
                 ROS_ERROR("get dispense time");

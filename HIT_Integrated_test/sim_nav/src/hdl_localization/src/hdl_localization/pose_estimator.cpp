@@ -205,6 +205,16 @@ pcl::PointCloud<PoseEstimator::PointT>::Ptr PoseEstimator::correct(const ros::Ti
   wo_pred_error = no_guess.inverse() * registration->getFinalTransformation();
 
   ukf->correct(observation);
+
+  // NOTE: Do NOT modify ukf->mean here.
+  // The LiDAR is mounted upside-down, so the correct orientation has
+  // roll≈180°.  Previous code that clamped roll=0 destroyed this,
+  // causing the IMU predict step to compute wrong gravity direction
+  // (acc = R(roll=0) * raw_acc gives 2g instead of canceling gravity),
+  // which made velocity and Z diverge catastrophically (~20 m/s²).
+  // Ground-robot Z constraint is applied at the OUTPUT level in
+  // publish_odometry() instead, leaving the UKF internally consistent.
+
   imu_pred_error = imu_guess.inverse() * registration->getFinalTransformation();
 
   if(odom_ukf) {

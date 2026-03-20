@@ -1,4 +1,4 @@
 <launch>
-    <arg name="filename" value="$(find bot_sim)/map/Feb12" />
+    <arg name="filename" value="/home/sentry_train_test/AstarTraining/HIT_Integrated_test/pcd/current" />
     <node name="map_save" pkg="map_server" type="map_saver" args="-f $(arg filename)" />
 </launch>

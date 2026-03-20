@@ -35,7 +35,8 @@ class SentryCollisionConstraint final : public ocs2::StateConstraint {
     std::shared_ptr<ObsConstraintSet> obsConstraintPtr_;
 
 private:
-    ocs2::scalar_t distance_threshold_ = 0.36;  // was 0.25 (0.5m), now 0.6m from inflated obstacle center
+    ocs2::scalar_t distance_threshold_ = 0.25;        // Fix 40c: was 0.16 (0.4m); now 0.5m effective clearance from inflated obstacle center
+    ocs2::scalar_t distance_threshold_dynamic_ = 0.49; // Fix 40c: was 0.36 (0.6m); now 0.7m effective clearance for moving objects
 
 };
 

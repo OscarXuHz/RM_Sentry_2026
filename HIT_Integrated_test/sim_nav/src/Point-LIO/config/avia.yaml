@@ -1,12 +1,17 @@
 common:
     lid_topic:  "/livox/lidar_192_168_1_3" 
-    imu_topic:  "/livox/imu_192_168_1_3" 
+    # lid_topic:  "/livox/lidar"
+    # imu_topic: "/livox/imu"
+    # 老订阅 
+    imu_topic:  "/livox/imu_192_168_1_3"
+
     con_frame: false # true: if you need to combine several LiDAR frames into one
     con_frame_num: 1 # the number of frames combined
     cut_frame: false # true: if you need to cut one LiDAR frame into several subframes
     cut_frame_time_interval: 0.1 # should be integral fraction of 1 / LiDAR frequency
-    time_lag_imu_to_lidar: -0.076856 # Time offset between LiDAR and IMU calibrated by other algorithms, e.g., LI-Init (find in Readme)
+    time_lag_imu_to_lidar:  0 # Time offset between LiDAR and IMU calibrated by other algorithms, e.g., LI-Init (find in Readme)
                                # the timesample of IMU is transferred from the current timeline to LiDAR's timeline by subtracting this value
+    #time_lag_imu_to_lidar: 0.0
 
 preprocess:
     lidar_type: 1 
@@ -21,7 +26,7 @@ mapping:
     imu_time_inte: 0.005 # = 1 / frequency of IMU
     satu_acc: 3.0 # the saturation value of IMU's acceleration. not related to the units
     satu_gyro: 35 # the saturation value of IMU's angular velocity. not related to the units
-    acc_norm: 1.0 # 1.0 for g as unit, 9.81 for m/s^2 as unit of the IMU's acceleration
+    acc_norm:  1 # 1.0 for g as unit, 9.81 for m/s^2 as unit of the IMU's acceleration
     lidar_meas_cov: 0.001 # 0.001; 0.01
     acc_cov_output: 500
     gyr_cov_output: 1000 
@@ -33,14 +38,19 @@ mapping:
     acc_cov_input: 0.1 # for IMU as input model
     plane_thr: 0.1 # 0.05, the threshold for plane criteria, the smaller, the flatter a plane
     match_s: 81
-    fov_degree: 90 
+    fov_degree: 180
     det_range: 450.0
     gravity_align: true # true to align the z axis of world frame with the direction of gravity, and the gravity direction should be specified below
-    gravity: [0.0, 0.0, -9.810] # [0.0, 9.810, 0.0] # gravity to be aligned
-    gravity_init: [0.0, 0.0, -9.810] # [0.0, 9.810, 0.0] # # preknown gravity in the first IMU body frame, use when imu_en is false or start from a non-stationary state
+    gravity: [0.0, 0.0, -9.810] # gravity to be aligned
+    # gravity_init: [-0.118228, 0.724085, -9.268780] [-3.599104, -4.508789, -7.567698]
+    gravity_init: [0.0, 0.0, -9.810]  # # preknown gravity in the first IMU body frame, use when imu_en is false or start from a non-stationary state
+    # extrinsic_T: [-0.108496, -0.408326, -0.117286]  # 平移
+    # extrinsic_R: [0.989644, -0.094101, 0.108399,    # 旋转矩阵  
+    #           -0.101035, -0.993051, 0.060346,
+    #           0.101967, -0.070673, -0.992274]
     extrinsic_T: [ 0.04165, 0.02326, -0.0284 ]
     extrinsic_R: [ 1, 0, 0,
-                   0, 1, 0,
+                  0, 1, 0,
                    0, 0, 1 ]
 
     #edited after calibration 2026-01-12
@@ -69,5 +79,10 @@ publish:
 
 pcd_save:
     pcd_save_en: true
-    interval: 1000                 # how many LiDAR frames saved in each pcd file; 
-                                 # -1 : all frames will be saved in ONE pcd file, may lead to memory crash when having too much frames.
+    interval: -1                   # -1 : all frames will be saved in ONE pcd file on shutdown
+                                   # >0 : save every N LiDAR frames to separate files
+    output_path: ""                # empty = default (ROOT_DIR/PCD/scans.pcd); set an absolute path to override
+    level_floor: true              # post-process PCD: detect floor via PCA, rotate to level, shift Z
+    floor_quantile: 0.08           # fraction of lowest-Z points used to identify the floor (0.08 = bottom 8%)
+    floor_target_z: 0.0            # target Z height for the floor after normalization
+    min_floor_points: 1000         # minimum number of floor points required (safety check)

@@ -518,11 +518,9 @@ void GlobalMap::topoSampleMap(cv::Mat topo_map)
                     coord2gridIndex(topoMapTemp.x(), topoMapTemp.y(), topoMapTemp.z(), pt_idx, pt_idy, pt_idz);
                     topoMapTemp.z() = getHeight(pt_idx, pt_idy);
                     topo_keypoint.push_back(topoMapTemp);
-
-                    if(GridNodeMap[pt_idx][pt_idy]->exist_second_height){  // 桥洞区域的所有点双倍采样，分别设置桥上和桥下点
-                        topoMapTemp.z() = GridNodeMap[pt_idx][pt_idy]->second_height;
-                        topo_keypoint.push_back(topoMapTemp);
-                    }
+                    // Fix 34a: Removed bridge dual-sampling — second_height is never
+                    // computed (stays at default 0.08), creating phantom guard points
+                    // at a wrong z-height that appear as a second visible layer.
 
                     for(int idx = -1; idx < 2; idx++){
                         for(int idy = -1; idy < 2; idy++){
@@ -535,11 +533,7 @@ void GlobalMap::topoSampleMap(cv::Mat topo_map)
                     coord2gridIndex(topoMapTemp.x(), topoMapTemp.y(), topoMapTemp.z(), pt_idx, pt_idy, pt_idz);
                     topoMapTemp.z() = getHeight(pt_idx, pt_idy);
                     topo_sample_map.push_back(topoMapTemp);
-
-                    if(GridNodeMap[pt_idx][pt_idy]->exist_second_height){  //桥洞同等处理
-                        topoMapTemp.z() = GridNodeMap[pt_idx][pt_idy]->second_height;
-                        topo_sample_map.push_back(topoMapTemp);
-                    }
+                    // Fix 34a: Removed bridge dual-sampling (same as keypoints above)
 
                 }
             }
@@ -579,7 +573,18 @@ void GlobalMap::localPointCloudToObstacle(const pcl::PointCloud<pcl::PointXYZ> &
     current_position_index = coord2gridIndex(current_position);  // 当前位置的栅格坐标
 
     pcl::PointXYZ pt;
-    memset(l_data, 0, GLXY_SIZE * sizeof(uint8_t));  // TODO 这里直接reset，因此桥洞标志位需要不同的reset方式
+    // ── Temporal decay instead of hard reset ──────────────────────
+    // Keep obstacles alive for OBS_PERSIST_FRAMES scan cycles so that
+    // objects behind the robot (no longer in the current scan) remain
+    // on the map for ~1.0 s at 10 Hz.  This fixes "flickering" where
+    // isolated ground obstacles vanish between consecutive scans.
+    // (Fix 26) Reduced from 20→10: 20 (2s) created "ghost" obstacles
+    // that blocked paths long after moving obstacles had left. 10 (1s)
+    // is enough for the global replan cycle while clearing promptly.
+    static const uint8_t OBS_PERSIST_FRAMES = 10;
+    for (int k = 0; k < GLXY_SIZE; ++k) {
+        if (l_data[k] > 0) l_data[k]--;
+    }
     resetUsedGrids();
 
     if (!swell_flag){
@@ -612,7 +617,10 @@ void GlobalMap::localPointCloudToObstacle(const pcl::PointCloud<pcl::PointXYZ> &
                 if (GridNodeMap[idx_x][idx_y]->second_height + m_height_threshold > pt.z || GridNodeMap[idx_x][idx_y]->second_height + m_height_sencond_high_threshold < pt.z)
                     continue;
             }
-            if(isOccupied(idx_x, idx_y, idx_z, false)){  // TODO 这里暂时处理为已经全局地图下被占用的情况下不再重新膨胀
+            // FIX: Only skip STATIC walls (data==1), not dynamic obstacles (l_data>0).
+            // isOccupied() was preventing l_data persist counter refresh → obstacles
+            // flickered off every 5 frames even while continuously detected.
+            if(data[idx_x * GLY_SIZE + idx_y] == 1){
                 continue;
             }
 
@@ -680,16 +688,17 @@ void GlobalMap::localSetObs(const double coord_x, const double coord_y, const do
     int idx_y = static_cast<int>((coord_y - gl_yl) * m_inv_resolution);
     int idx_z = static_cast<int>((0 - gl_zl) * m_inv_resolution);
 
+    static const uint8_t OBS_PERSIST = 10;  // match decay constant (1s at 10 Hz)
     if(GridNodeMap[idx_x][idx_y]->exist_second_height){
         // 在桥洞位置，我们需要根据局部点云的高度和地图的高度差来判断是否桥洞被占用了还是高地被占用了
         if(coord_z > GridNodeMap[idx_x][idx_y]->second_height + m_height_threshold && coord_z < GridNodeMap[idx_x][idx_y]->second_height + m_height_sencond_high_threshold){  // 如果在桥洞里就设置障碍物
             GridNodeMap[idx_x][idx_y]->second_local_occupancy = true;  //桥下占用
         }else if(coord_z > GridNodeMap[idx_x][idx_y]->height + m_height_threshold && coord_z < GridNodeMap[idx_x][idx_y]->height + 0.3){  // 如果在桥上则在l_data中设置障碍物
-            l_data[idx_x * GLY_SIZE + idx_y] = 1; // 桥上占用，在扫到桥洞前沿顶的时候膨胀可能会导致膨胀到外边，外边也是认为桥洞区域因此需要严格设置顶高的阈值(目前0.4)
+            l_data[idx_x * GLY_SIZE + idx_y] = OBS_PERSIST; // 桥上占用 — persist counter
         }
     }else{
-        /* 将障碍物映射为容器里值为1的元素,根据这里的值做raycast process */
-        l_data[idx_x * GLY_SIZE + idx_y] = 1;
+        /* 将障碍物映射为容器里值为持久计数器,根据这里的值做raycast process */
+        l_data[idx_x * GLY_SIZE + idx_y] = OBS_PERSIST;
     }
 }
 
@@ -855,18 +864,18 @@ bool GlobalMap::isOccupied(const int &idx_x, const int &idx_y, const int &idx_z,
                 (data[idx_x * GLY_SIZE + idx_y] == 1 || GridNodeMap[idx_x][idx_y]->second_local_occupancy == true));
     }
     return (idx_x >= 0 && idx_x < GLX_SIZE && idx_y >= 0 && idx_y < GLY_SIZE && idx_z >= 0 &&
-            (data[idx_x * GLY_SIZE + idx_y] == 1 || l_data[idx_x * GLY_SIZE + idx_y] == 1));
+            (data[idx_x * GLY_SIZE + idx_y] == 1 || l_data[idx_x * GLY_SIZE + idx_y] > 0));
 }
 
 bool GlobalMap::isLocalOccupied(const int &idx_x, const int &idx_y, const int &idx_z) const
 {
     return (idx_x >= 0 && idx_x < GLX_SIZE && idx_y >= 0 && idx_y < GLY_SIZE && idx_z >= 0 && idx_z < GLZ_SIZE &&
-            (l_data[idx_x * GLY_SIZE + idx_y] == 1));
+            (l_data[idx_x * GLY_SIZE + idx_y] > 0));
 
 }
 
 bool GlobalMap::isFree(const int &idx_x, const int &idx_y, const int &idx_z) const
 {
     return (idx_x >= 0 && idx_x < GLX_SIZE && idx_y >= 0 && idx_y < GLY_SIZE && idx_z >= 0 && idx_z < GLZ_SIZE &&
-            (data[idx_x * GLY_SIZE + idx_y] < 1 && l_data[idx_x * GLY_SIZE + idx_y] < 1));
+            (data[idx_x * GLY_SIZE + idx_y] < 1 && l_data[idx_x * GLY_SIZE + idx_y] == 0));
 }

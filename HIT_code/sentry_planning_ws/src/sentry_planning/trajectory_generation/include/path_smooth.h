@@ -7,7 +7,7 @@
 #include <Eigen/Geometry>
 #include <ros/ros.h>
 #include <ros/console.h>
-#include <root_solver/cubic_spline.hpp>
+#include <root_solver/minco_trajectory.hpp>
 #include <root_solver/lbfgs.hpp>
 #include <pcl/filters/passthrough.h>
 #include <pcl/point_cloud.h>
@@ -34,6 +34,7 @@ public:
     std::vector<double> weighs;
     Eigen::Matrix2Xd pathInPs;
     bool init_obs = false;
+    int cost_call_count = 0;  // (Fix 30) L-BFGS iteration counter for obs cache refresh
     bool init_vel = false;
     std::vector<double> m_trapezoidal_time;
     double desire_veloity;
@@ -70,7 +71,10 @@ private:
     int pieceN; //路径数量
     Eigen::Vector2d headP;
     Eigen::Vector2d tailP;
-    CubicSpline cubSpline;
+    Eigen::Vector2d headV_stored;  // stored head velocity for MINCO
+    Eigen::Vector2d headA_stored;  // stored head acceleration for MINCO
+    Eigen::Matrix2Xd refWaypoints; // reference waypoints for elastic band cost
+    MincoTrajectory mincoTraj;
     lbfgs::lbfgs_parameter lbfgs_params;
 
     std::vector<Eigen::Vector2d> path;  // 采样得到的初始轨迹

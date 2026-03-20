@@ -218,16 +218,33 @@ void Refenecesmooth::getRefTrajectory(std::vector<Eigen::Vector3d> &ref_trajecto
     ref_trajectory.clear();
     reference_path.clear();
 
-    // 进行时间分配和三次多项式求解
-    solveTrapezoidalTime();
-    int iter = 0;
-    while(resolve){
-        if(iter < 3){
+    // If external MINCO-optimized times are provided, use them directly
+    // instead of computing trapezoidal time allocation + feasibility loop.
+    if (!times.empty() && (int)times.size() == (int)(m_global_path.size() - 1)) {
+        m_trapezoidal_time = times;
+        ROS_INFO("[Reference] Using MINCO-optimized durations (%zu segments, total=%.3f s)",
+                 times.size(), std::accumulate(times.begin(), times.end(), 0.0));
+        solvePolyMatrix();
+        // Still run feasibility check as safety net
+        int iter = 0;
+        bool needs_resolve = checkfeasible();
+        while (needs_resolve && iter < 3) {
             solvePolyMatrix();
-            resolve = checkfeasible();
-            iter ++;
-        }else{
-            break;
+            needs_resolve = checkfeasible();
+            iter++;
+        }
+    } else {
+        // Fallback: original trapezoidal time allocation with feasibility loop
+        solveTrapezoidalTime();
+        int iter = 0;
+        while(resolve){
+            if(iter < 3){
+                solvePolyMatrix();
+                resolve = checkfeasible();
+                iter ++;
+            }else{
+                break;
+            }
         }
     }
 
@@ -239,18 +256,34 @@ void Refenecesmooth::getRefTrajectory(std::vector<Eigen::Vector3d> &ref_trajecto
 
     double time = accumulate(m_trapezoidal_time.begin(), m_trapezoidal_time.end(), 0.0);
 
+    // Safety cap: prevent absurdly large trajectory that would crash RViz
+    // and exhaust memory.  30s at dt=0.05 → 600 points, which is plenty.
+    const double MAX_TRAJ_TIME = 30.0;
+    if (time > MAX_TRAJ_TIME) {
+        ROS_WARN("[Reference] total time %.1f s exceeds cap (%.1f s), scaling down",
+                 time, MAX_TRAJ_TIME);
+        double scale = MAX_TRAJ_TIME / time;
+        for (size_t ti = 0; ti < m_trapezoidal_time.size(); ti++) {
+            m_trapezoidal_time[ti] *= scale;
+        }
+        time = MAX_TRAJ_TIME;
+    }
+
     for (int i = 0; i<(int)(time/dt); i++)
     {
         int index;
         double total_time;
         getSegmentIndex(i*dt, index, total_time);
+        double local_t = i * dt - total_time;  // consistent local time within segment
         Eigen::Vector3d ref_point;
-        ref_point(0) = m_polyMatrix_x(index, 0) * pow((i * dt - total_time), 3) + m_polyMatrix_x(index, 1) * pow(
-                (i * dt - total_time), 2) + m_polyMatrix_x(index, 2) * (i - (int) (total_time / dt)) * dt + m_polyMatrix_x(
-                index, 3);
-        ref_point(1) = m_polyMatrix_y(index, 0) * pow((i * dt - total_time), 3) + m_polyMatrix_y(index, 1) * pow(
-                (i * dt - total_time), 2) + m_polyMatrix_y(index, 2) * (i - (int) (total_time / dt)) * dt + m_polyMatrix_y(
-                index, 3);
+        ref_point(0) = m_polyMatrix_x(index, 0) * local_t * local_t * local_t
+                     + m_polyMatrix_x(index, 1) * local_t * local_t
+                     + m_polyMatrix_x(index, 2) * local_t
+                     + m_polyMatrix_x(index, 3);
+        ref_point(1) = m_polyMatrix_y(index, 0) * local_t * local_t * local_t
+                     + m_polyMatrix_y(index, 1) * local_t * local_t
+                     + m_polyMatrix_y(index, 2) * local_t
+                     + m_polyMatrix_y(index, 3);
         ref_point(2) = 0.0;
         ref_trajectory.push_back(ref_point);
         reference_path.push_back(ref_point);
@@ -266,11 +299,14 @@ void Refenecesmooth::getRefVel()
         int index;
         double total_time;
         getSegmentIndex(i*dt, index, total_time);
+        double local_t = i * dt - total_time;  // consistent local time within segment
         Eigen::Vector3d ref_point;
-        ref_point(0) = 3 * m_polyMatrix_x(index, 0) * pow((i - (int) (total_time / dt)) * dt, 2) + 2 * m_polyMatrix_x(index, 1) * pow(
-                (i - (int) (total_time / dt)) * dt, 1) + m_polyMatrix_x(index, 2);
-        ref_point(1) = 3 * m_polyMatrix_y(index, 0) * pow((i - (int) (total_time / dt)) * dt, 2) + 2 * m_polyMatrix_y(index, 1) * pow(
-                (i - (int) (total_time / dt)) * dt, 1) + m_polyMatrix_y(index, 2);
+        ref_point(0) = 3.0 * m_polyMatrix_x(index, 0) * local_t * local_t
+                     + 2.0 * m_polyMatrix_x(index, 1) * local_t
+                     + m_polyMatrix_x(index, 2);
+        ref_point(1) = 3.0 * m_polyMatrix_y(index, 0) * local_t * local_t
+                     + 2.0 * m_polyMatrix_y(index, 1) * local_t
+                     + m_polyMatrix_y(index, 2);
         ref_point(2) = 0.0;
         reference_velocity.push_back(ref_point);
     }

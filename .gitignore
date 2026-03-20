@@ -32,3 +32,15 @@ __pycache__/
 
 # ROS log files
 *.roslog
+
+# Large binary data — keep out of version control
+*.pcd
+*.bag
+
+# Catkin workspace artifacts
+catkin_generated/
+atomic_configure/
+gtest/
+test_results/
+CTestConfiguration.ini
+CTestCustom.cmake

@@ -319,7 +319,15 @@ void GlobalMap::localPointCloudToObstacle(const pcl::PointCloud<pcl::PointXYZ> &
     current_position_index = coord2gridIndex(current_position);  // 当前位置的栅格坐标
 
     pcl::PointXYZ pt;
-    memset(l_data, 0, GLXY_SIZE * sizeof(uint8_t));
+    // ── Temporal decay instead of hard reset ──────────────────────
+    // Keep obstacles alive for OBS_PERSIST_FRAMES scan cycles so that
+    // objects behind the robot (no longer in the current scan) remain
+    // on the map for ~0.5 s at 10 Hz.  This fixes MPC path flickering
+    // caused by obstacle set changing completely every frame.
+    static const uint8_t OBS_PERSIST_FRAMES = 5;
+    for (int k = 0; k < GLXY_SIZE; ++k) {
+        if (l_data[k] > 0) l_data[k]--;
+    }
     // ROS_WARN("m_robot_radius_dash: %f", m_robot_radius_dash);
 
     if (!swell_flag){
@@ -349,7 +357,12 @@ void GlobalMap::localPointCloudToObstacle(const pcl::PointCloud<pcl::PointXYZ> &
             if (GridNodeMap[idx_x][idx_y]->height + m_height_threshold > pt.z || GridNodeMap[idx_x][idx_y]->height + 1.0 < pt.z)
                 continue;
             ///底层tracking中我们不对桥洞的障碍物进行过多处理，不考虑桥洞中的障碍物，简化一下逻辑
-            if(isOccupied(idx_x, idx_y, idx_z) || GridNodeMap[idx_x][idx_y]->exist_second_height){
+            // FIX: Only skip STATIC walls (data==1) and bridge areas.
+            // Previously used isOccupied() which also skipped cells with l_data>0,
+            // preventing the persist counter from being refreshed → obstacles
+            // flickered off every 5 frames (~0.5s gap) even while continuously
+            // detected by the LiDAR.
+            if(data[idx_x * GLY_SIZE + idx_y] == 1 || GridNodeMap[idx_x][idx_y]->exist_second_height){
                 continue;
             }
 
@@ -406,8 +419,9 @@ void GlobalMap::localSetObs(const double coord_x, const double coord_y, const do
     int idx_y = static_cast<int>((coord_y - gl_yl) * m_inv_resolution);
     int idx_z = static_cast<int>((0 - gl_zl) * m_inv_resolution);
 
-    /* 将障碍物映射为容器里值为1的元素,根据这里的值做raycast process */
-    l_data[idx_x * GLY_SIZE + idx_y] = 1;
+    /* 将障碍物映射为容器里值为持久计数器,根据这里的值做raycast process */
+    static const uint8_t OBS_PERSIST = 5;  // match decay constant
+    l_data[idx_x * GLY_SIZE + idx_y] = OBS_PERSIST;
 }
 
 
@@ -502,18 +516,18 @@ bool GlobalMap::isFree(const Eigen::Vector3i &index) const
 bool GlobalMap::isOccupied(const int &idx_x, const int &idx_y, const int &idx_z) const
 {
     return (idx_x >= 0 && idx_x < GLX_SIZE && idx_y >= 0 && idx_y < GLY_SIZE && idx_z >= 0 &&
-            (data[idx_x * GLY_SIZE + idx_y] == 1 || l_data[idx_x * GLY_SIZE + idx_y] == 1));
+            (data[idx_x * GLY_SIZE + idx_y] == 1 || l_data[idx_x * GLY_SIZE + idx_y] > 0));
 }
 
 bool GlobalMap::isLocalOccupied(const int &idx_x, const int &idx_y, const int &idx_z) const
 {
     return (idx_x >= 0 && idx_x < GLX_SIZE && idx_y >= 0 && idx_y < GLY_SIZE && idx_z >= 0 && idx_z < GLZ_SIZE &&
-            (l_data[idx_x * GLY_SIZE + idx_y] == 1));
+            (l_data[idx_x * GLY_SIZE + idx_y] > 0));
 
 }
 
 bool GlobalMap::isFree(const int &idx_x, const int &idx_y, const int &idx_z) const
 {
     return (idx_x >= 0 && idx_x < GLX_SIZE && idx_y >= 0 && idx_y < GLY_SIZE && idx_z >= 0 && idx_z < GLZ_SIZE &&
-            (data[idx_x * GLY_SIZE + idx_y] < 1 && l_data[idx_x * GLY_SIZE + idx_y] < 1));
+            (data[idx_x * GLY_SIZE + idx_y] < 1 && l_data[idx_x * GLY_SIZE + idx_y] == 0));
 }

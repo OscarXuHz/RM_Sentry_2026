@@ -3,7 +3,7 @@
 <arg name="map_meta_file" default="$(find trajectory_generation)/map/map_meta.yaml" />
 <arg name="map_resolution" default="$(eval float(dict(l.strip().split(': ', 1) for l in open(arg('map_meta_file')) if ': ' in l and not l.startswith('#'))['resolution']))" />
 <arg name="robot_radius" default="0.35" />
-<arg name="reference_desire_speed" default="2.8" />
+<arg name="reference_desire_speed" default="2.0" />  <!-- was 2.8; must be ≤ MPC max_state_velocity_=2.5 -->
 <arg name="enable_rviz" default="false" />
 <arg name="map_x_size" default="$(eval float(dict(l.strip().split(': ', 1) for l in open(arg('map_meta_file')) if ': ' in l and not l.startswith('#'))['map_x_size']))" />
 <arg name="map_y_size" default="$(eval float(dict(l.strip().split(': ', 1) for l in open(arg('map_meta_file')) if ': ' in l and not l.startswith('#'))['map_y_size']))" />
@@ -12,7 +12,7 @@
 
 <node name="rviz" pkg="rviz" type="rviz" args="-d $(find trajectory_generation)/cfg/2D_map.rviz" if="$(arg enable_rviz)"/>
 
-<node pkg="trajectory_generation" name="trajectory_generation" type="trajectory_generation" output="screen" required = "true" launch-prefix="gdb -batch -ex run -ex 'thread apply all bt full' -ex quit --args" >
+<node pkg="trajectory_generation" name="trajectory_generation" type="trajectory_generation" output="screen" respawn="true" respawn_delay="1.0" >
     <remap from="/odometry_imu" to="/odom_local" />
     <remap from="/cloud_registered_world" to="/aligned_points_local" />
     <remap from="/realsense_pointcloud" to="/aligned_points_local" />
@@ -22,7 +22,7 @@
     <param name="trajectory_generator/map_y_size" value="$(arg map_y_size)"/>
 <!--     <param name="trajectory_generator/map_y_size" value="30.0"/> -->
     <param name="trajectory_generator/map_z_size" value="2.0"/>
-    <param name="trajectory_generator/search_height_min" value="0.1"/>  <!-- 仿真环境参数-->
+    <param name="trajectory_generator/search_height_min" value="-0.05"/>  <!-- lowered from 0.1 to catch near-ground obstacles -->
 <!--     <param name="trajectory_generator/search_height_min" value="0.1"/> -->
     <param name="trajectory_generator/search_height_max" value="1.2"/>
     <param name="trajectory_generator/search_radius" value="6.0"/>
@@ -33,8 +33,8 @@
     <param name="trajectory_generator/xtl_flag" value="false"/>
     <param name="trajectory_generator/map_resolution" value="$(arg map_resolution)"/>
 
-    <param name="trajectory_generator/reference_v_max" value="3.5"/>
-    <param name="trajectory_generator/reference_a_max" value="10.0"/>  <!--xtl:8.0  normal 11.0-->>
+    <param name="trajectory_generator/reference_v_max" value="2.5"/>  <!-- was 3.5 — reduced for safety -->
+    <param name="trajectory_generator/reference_a_max" value="4.0"/>  <!-- was 10.0 — was way too aggressive -->
     <param name="trajectory_generator/reference_w_max" value="4.0"/>
     <param name="trajectory_generator/reference_desire_speed" value="$(arg reference_desire_speed)"/>  <!--xtl 1.8，正常环境极限速度2.8，可能实际更难达到-->>
     <param name="trajectory_generator/reference_desire_speedxtl" value="2.4"/>
@@ -45,9 +45,9 @@
     <param name="trajectory_generator/map_lower_point_y" value="$(arg map_lower_y)"/>
     <param name="trajectory_generator/map_lower_point_z" value="0.0"/>
 
-    <param name="trajectory_generator/height_bias" value="0.0"/>  <!-- 地图高度偏置参数-->
+    <param name="trajectory_generator/height_bias" value="0.015294117853045464"/>  <!-- 地图高度偏置参数-->
     <param name="trajectory_generator/height_interval" value="1.5"/> <!-- 地图高度间隔参数,高度地图所有像素的高度间隔-->
-    <param name="trajectory_generator/height_threshold" value="0.15"/> <!-- 地图高度阈值参数,障碍物点云高度滞环检测阈值-->
+    <param name="trajectory_generator/height_threshold" value="0.08"/> <!-- lowered from 0.15 to detect low ground obstacles -->
     <param name="trajectory_generator/height_sencond_high_threshold" value="0.2"/> <!-- 桥梁地图高度阈值参数,这个是顶部高度阈值-->
 
 
