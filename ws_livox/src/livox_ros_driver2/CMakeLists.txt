@@ -92,7 +92,9 @@ if(ROS_EDITION STREQUAL "ROS1")
   set(CMAKE_CXX_EXTENSIONS OFF)
 
   ## make sure the livox_lidar_sdk_static library is installed
-  find_library(LIVOX_LIDAR_SDK_LIBRARY  liblivox_lidar_sdk_static.a    /usr/local/lib)
+  find_library(LIVOX_LIDAR_SDK_LIBRARY  livox_lidar_sdk_static  
+    /home/sentry/AstarTraining/RM_Sentry_2026/Livox-SDK2/build/sdk_core
+    /usr/local/lib)
 
   ## PCL library
   link_directories(${PCL_LIBRARY_DIRS})
