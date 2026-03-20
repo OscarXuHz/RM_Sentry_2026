@@ -3,12 +3,12 @@
     HIT Integration Point-LIO Map Builder
     
     Builds a 3D point cloud map using Point-LIO and saves it as scans.pcd
-    in /home/sentry_train_test/AstarTraining/HIT_Integrated_test/pcd/.
+    in /home/sentry/AstarTraining/RM_Sentry_2026/HIT_Integrated_test/pcd/.
     
     After the map is built (Ctrl-C to stop), the operator inspects the output
     and renames it to current.pcd if acceptable:
     
-        cd /home/sentry_train_test/AstarTraining/HIT_Integrated_test/pcd
+        cd /home/sentry/AstarTraining/RM_Sentry_2026/HIT_Integrated_test/pcd
         mv scans.pcd current.pcd
         # Then run pcd_to_maps.py to regenerate planner map products
     
@@ -20,19 +20,22 @@
         3. Shift Z so the floor median sits at floor_target_z (default 0.0)
     
     Prerequisites:
-        source /home/sentry_train_test/AstarTraining/HIT_Integrated_test/hit_env.bash
+        source /home/sentry/AstarTraining/RM_Sentry_2026/HIT_Integrated_test/hit_env.bash
     
     Usage:
-        roslaunch /home/sentry_train_test/AstarTraining/HIT_Integrated_test/HIT_pointlio_map_builder.launch
+        roslaunch /home/sentry/AstarTraining/RM_Sentry_2026/HIT_Integrated_test/HIT_pointlio_map_builder.launch
         roslaunch ... enable_rviz:=true   # to visualise during mapping
     -->
 
     <arg name="enable_rviz" default="false" />
-    <arg name="pcd_output" default="/home/sentry_train_test/AstarTraining/HIT_Integrated_test/pcd/scans.pcd" />
+    <arg name="pcd_output" default="/home/sentry/AstarTraining/RM_Sentry_2026/HIT_Integrated_test/pcd/scans.pcd" />
     <arg name="floor_quantile" default="0.08" doc="Fraction of lowest-Z points used as floor for PCA (0.08 = bottom 8%%)" />
     <arg name="floor_target_z" default="0.0" doc="Target Z height for floor after normalization" />
     <arg name="min_floor_points" default="1000" doc="Minimum floor points required for normalization safety check" />
     <arg name="pca_max_iterations" default="5" doc="Max PCA floor-leveling passes (default 5; converges early if tilt &lt; 0.005 deg)" />
+    <arg name="lidar_height" default="0.3" doc="LiDAR mounting height above floor (m). Shifts z=0 to the floor plane." />
+    <arg name="z_floor"   default="-0.5" doc="Discard points with Z below this height (metres) when saving PCD" />
+    <arg name="z_ceiling" default="0.4"  doc="Discard points with Z above this height (metres) when saving PCD" />
 
     <!-- 1) Livox driver -->
     <include file="$(find livox_ros_driver2)/launch_ROS1/msg_mixed.launch" />
@@ -68,6 +71,9 @@
         <param name="pcd_save/floor_target_z" value="$(arg floor_target_z)" />
         <param name="pcd_save/min_floor_points" value="$(arg min_floor_points)" />
         <param name="pcd_save/pca_max_iterations" value="$(arg pca_max_iterations)" />
+        <param name="mapping/lidar_height" type="double" value="$(arg lidar_height)" />
+        <param name="pcd_save/z_floor"   type="double" value="$(arg z_floor)" />
+        <param name="pcd_save/z_ceiling" type="double" value="$(arg z_ceiling)" />
     </node>
 
     <group if="$(arg enable_rviz)">

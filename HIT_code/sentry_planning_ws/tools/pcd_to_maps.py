@@ -42,7 +42,7 @@ _MAP_DEPLOY_DIR = (
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Convert PCD to occ/bev/occtopo PNG maps.")
     parser.add_argument("--pcd", required=True, help="Input .pcd file path")
-    parser.add_argument("--out", required=True, help="Output directory for PNGs")
+    parser.add_argument("--out", default=None, help="Output directory for PNGs (default: <workspace>/HIT_code/sentry_planning_ws/tools/tmp_maps)")
 
     parser.add_argument("--resolution", type=float, default=0.1, help="Map resolution (m/pixel)")
     parser.add_argument("--map-x-size", type=float, default=50.0, help="Map size X in meters")
@@ -225,6 +225,8 @@ def build_occtopo(occ: np.ndarray) -> np.ndarray:
 
 def main() -> None:
     args = parse_args()
+    if args.out is None:
+        args.out = str(_WORKSPACE_ROOT / "HIT_code" / "sentry_planning_ws" / "tools" / "tmp_maps")
     out_dir = Path(args.out)
     out_dir.mkdir(parents=True, exist_ok=True)
 
@@ -236,6 +238,13 @@ def main() -> None:
     points = np.asarray(pcd.points)
     if points.size == 0:
         raise SystemExit("PCD has no points.")
+
+    # Hard Z-band filter: keep only points in [z_floor, z_ceiling]
+    _Z_FLOOR   = -0.5
+    _Z_CEILING =  0.4
+    points = points[(points[:, 2] >= _Z_FLOOR) & (points[:, 2] <= _Z_CEILING)]
+    if points.size == 0:
+        raise SystemExit(f"PCD has no points after Z-band [{_Z_FLOOR}, {_Z_CEILING}] filter.")
 
     # Auto-center map based on the point cloud if requested
     if args.center != "none":

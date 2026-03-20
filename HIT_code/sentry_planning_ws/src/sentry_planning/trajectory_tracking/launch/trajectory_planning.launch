@@ -5,7 +5,6 @@
 <arg name="map_resolution" default="$(eval float(dict(l.strip().split(': ', 1) for l in open(arg('map_meta_file')) if ': ' in l and not l.startswith('#'))['resolution']))" />
 <arg name="robot_radius" default="0.35" />
 <arg name="local_v_max" default="2.0" />  <!-- was 2.8; aligned with MPC max_state_velocity_=2.5 -->
-<arg name="use_omega_output" default="false" />
 <arg name="map_x_size" default="$(eval float(dict(l.strip().split(': ', 1) for l in open(arg('map_meta_file')) if ': ' in l and not l.startswith('#'))['map_x_size']))" />
 <arg name="map_y_size" default="$(eval float(dict(l.strip().split(': ', 1) for l in open(arg('map_meta_file')) if ': ' in l and not l.startswith('#'))['map_y_size']))" />
 <arg name="map_lower_x" default="$(eval float(dict(l.strip().split(': ', 1) for l in open(arg('map_meta_file')) if ': ' in l and not l.startswith('#'))['map_lower_x']))" />
@@ -50,7 +49,6 @@
     <param name="tracking_node/search_radius" value="6.0"/>
     <param name="tracking_node/robot_radius_dash" value="0.35"/>  <!--仿真环境设置为0.1，因为点云没有去畸变，实际0.2-->>
     <param name="tracking_node/robot_radius" value="$(arg robot_radius)"/>
-    <param name="tracking_node/use_omega_output" value="$(arg use_omega_output)"/>
 
     <param name="tracking_node/height_bias" value="-0.38"/>  <!-- 地图高度偏置参数-->
     <param name="tracking_node/height_interval" value="1.5"/> <!-- 地图高度间隔参数,高度地图所有像素的高度间隔-->

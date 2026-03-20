@@ -1,26 +1,15 @@
 /**
  * hit_bridge — Converts HIT MPC output (sentry_msgs/slaver_speed) to
- *              geometry_msgs/Twist for the mcu_communicator serial bridge.
+ *              geometry_msgs/Twist for the mcu_communicator CAN bridge.
  *
- * ─── Two output modes (selected via use_omega_output param) ───
+ * ─── Direct vx/vy passthrough mode ───
  *
- * [OMNI MODE – default]   (use_omega_output = false)
- *   For the OLD omnidirectional robot.
- *   slaver_speed fields carry: (angle_target=heading, angle_current=lidar_yaw, line_speed=v)
- *   Bridge decomposes v into body-frame vx/vy:
- *     δ = angle_target − angle_current
- *     vx = line_speed · cos(δ)
- *     vy = line_speed · sin(δ)
- *   z_angle = 0  (heading is implicit in vx/vy decomposition;
- *                 the old MCU does NOT use z_angle for heading PID)
- *
- * [OMEGA MODE]              (use_omega_output = true)
- *   For the NEW differential/unicycle robot.
- *   slaver_speed fields carry: (angle_target=ω, angle_current=unused, line_speed=v)
+ *   tracking_manager now computes body-frame vx/vy directly.
+ *   slaver_speed fields carry: (angle_target=vx, angle_current=vy, line_speed=z_angle)
  *   Bridge passes through:
- *     vx      = line_speed   (forward speed)
- *     vy      = 0            (cannot strafe)
- *     z_angle = angle_target (angular velocity ω; MCU does its own heading PID)
+ *     twist.linear.x  = angle_target   (body-frame vx)
+ *     twist.linear.y  = angle_current  (body-frame vy)
+ *     twist.angular.z = line_speed     (angular velocity, 0 for omni)
  */
 #include <ros/ros.h>
 #include <sentry_msgs/slaver_speed.h>
@@ -30,40 +19,29 @@
 
 ros::Publisher twist_pub;
 ros::Publisher arrived_pub;
-bool g_use_omega_output = false;
 
 void speedCallback(const sentry_msgs::slaver_speed::ConstPtr& msg)
 {
     geometry_msgs::Twist twist;
 
-    if (g_use_omega_output) {
-        // ── OMEGA MODE (new robot: vx + ω, cannot strafe) ──
-        twist.linear.x  = msg->line_speed;     // forward speed v
-        twist.linear.y  = 0.0;                 // no strafing
-        twist.linear.z  = 0.0;
-        twist.angular.x = 0.0;
-        twist.angular.y = 0.0;
-        twist.angular.z = msg->angle_target;   // angular velocity ω
-    } else {
-        // ── OMNI MODE (old robot: projected vx/vy, z_angle=0) ──
-        double delta = msg->angle_target - msg->angle_current;
-        twist.linear.x  = msg->line_speed * std::cos(delta);  // body-frame forward
-        twist.linear.y  = msg->line_speed * std::sin(delta);  // body-frame leftward
-        twist.linear.z  = 0.0;
-        twist.angular.x = 0.0;
-        twist.angular.y = 0.0;
-        twist.angular.z = 0.0;                                // NOT used by old MCU
-    }
+    // Direct passthrough: tracking_manager already computes body-frame vx/vy
+    twist.linear.x  = msg->angle_target;   // body-frame vx
+    twist.linear.y  = msg->angle_current;  // body-frame vy
+    twist.linear.z  = 0.0;
+    twist.angular.x = 0.0;
+    twist.angular.y = 0.0;
+    twist.angular.z = msg->line_speed;     // angular velocity (0 for omni)
 
     twist_pub.publish(twist);
 
-    // Arrival flag: tracking_node zeroes line_speed when it reaches the goal.
+    // Arrival flag: tracking_node zeroes speeds when it reaches the goal.
     std_msgs::Bool arrived;
-    arrived.data = (std::fabs(msg->line_speed) < 0.01);
+    arrived.data = (std::fabs(msg->angle_target) < 0.01 &&
+                    std::fabs(msg->angle_current) < 0.01 &&
+                    std::fabs(msg->line_speed) < 0.01);
     arrived_pub.publish(arrived);
 
-    ROS_DEBUG("[hit_bridge] mode=%s  vx=%.3f vy=%.3f z=%.3f",
-              g_use_omega_output ? "omega" : "omni",
+    ROS_DEBUG("[hit_bridge] vx=%.3f vy=%.3f z=%.3f",
               twist.linear.x, twist.linear.y, twist.angular.z);
 }
 
@@ -76,15 +54,13 @@ int main(int argc, char** argv)
     nh.param<std::string>("cmd_vel_topic",  cmd_vel_topic,  "/cmd_vel");
     nh.param<std::string>("speed_topic",    speed_topic,    "/sentry_des_speed");
     nh.param<std::string>("arrived_topic",  arrived_topic,  "/dstar_status");
-    nh.param<bool>("use_omega_output",      g_use_omega_output, false);
 
     twist_pub   = nh.advertise<geometry_msgs::Twist>(cmd_vel_topic, 1);
     arrived_pub = nh.advertise<std_msgs::Bool>(arrived_topic, 1);
 
     ros::Subscriber speed_sub = nh.subscribe(speed_topic, 10, speedCallback);
 
-    ROS_INFO("[hit_bridge] mode=%s  %s -> %s  + %s (arrived)",
-             g_use_omega_output ? "OMEGA (vx + omega, vy=0)" : "OMNI (vx/vy projected, z_angle=0)",
+    ROS_INFO("[hit_bridge] direct vx/vy passthrough  %s -> %s  + %s (arrived)",
              speed_topic.c_str(), cmd_vel_topic.c_str(), arrived_topic.c_str());
 
     ros::spin();

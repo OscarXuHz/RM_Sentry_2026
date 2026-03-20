@@ -2,6 +2,7 @@
 #include <mutex>
 #include <math.h>
 #include <algorithm>
+#include <limits>
 #include <thread>
 #include <fstream>
 #include <csignal>
@@ -125,8 +126,13 @@ bool normalize_floor_in_saved_map(PointCloudXYZI::Ptr cloud, double floor_quanti
         }
 
         // --- Find robust floor Z estimate ---
-        // Use histogram mode: bin Z values and find the most populated bin
-        // in the lower half of the Z range (floor is low).
+        // The floor is the LOWEST dense horizontal surface, not the globally
+        // densest one.  In a multi-layer environment (lab with ceiling void)
+        // the global mode may land on the ceiling or wall zone.
+        //
+        // Strategy: build a Z histogram, then scan upward from the bottom to
+        // find the first bin whose count exceeds a fraction of the peak count
+        // (the "lowest significant peak").
         double z_min_val = *std::min_element(z_all.begin(), z_all.end());
         double z_max_val = *std::max_element(z_all.begin(), z_all.end());
         double z_range = z_max_val - z_min_val;
@@ -149,20 +155,55 @@ bool normalize_floor_in_saved_map(PointCloudXYZI::Ptr cloud, double floor_quanti
             hist[bin]++;
         }
 
-        // Find mode bin across the FULL Z range — the floor is the densest
-        // horizontal surface so it produces the most populated Z bin.
-        int mode_bin = 0;
-        int mode_count = 0;
+        // Smooth histogram with a ±5-bin (~50 cm) window to suppress noise
+        std::vector<double> smooth(n_bins, 0.0);
+        const int hw = 5;  // half-window
         for (int b = 0; b < n_bins; ++b) {
-            if (hist[b] > mode_count) {
-                mode_count = hist[b];
-                mode_bin = b;
+            double sum = 0.0;
+            int cnt = 0;
+            for (int k = std::max(0, b - hw); k <= std::min(n_bins - 1, b + hw); ++k) {
+                sum += hist[k];
+                cnt++;
+            }
+            smooth[b] = sum / cnt;
+        }
+
+        // Find the global peak in the smoothed histogram
+        double smooth_peak = *std::max_element(smooth.begin(), smooth.end());
+
+        // Scan upward from the bottom: the first bin whose smoothed count
+        // exceeds 30% of the global peak is the floor candidate.
+        const double floor_frac = 0.30;
+        int floor_bin = 0;
+        for (int b = 0; b < n_bins; ++b) {
+            if (smooth[b] >= floor_frac * smooth_peak) {
+                floor_bin = b;
+                break;
             }
         }
-        floor_z_estimate = z_min_val + (mode_bin + 0.5) * bin_width;
 
-        // If mode has very few points, fall back to quantile median
-        if (mode_count < min_floor_points) {
+        // Refine: find the local maximum around this starting bin (±10 bins)
+        {
+            int best = floor_bin;
+            double best_val = smooth[floor_bin];
+            for (int b = std::max(0, floor_bin - 10); b <= std::min(n_bins - 1, floor_bin + 10); ++b) {
+                if (smooth[b] > best_val) {
+                    best_val = smooth[b];
+                    best = b;
+                }
+            }
+            floor_bin = best;
+        }
+
+        floor_z_estimate = z_min_val + (floor_bin + 0.5) * bin_width;
+        ROS_INFO_STREAM("[pcd_save] iter " << iter
+                        << ": floor_z_estimate=" << floor_z_estimate
+                        << " (bin " << floor_bin << "/" << n_bins
+                        << ", smooth_count=" << smooth[floor_bin]
+                        << ", global_peak=" << smooth_peak << ")");
+
+        // If the detected bin has very few points, fall back to quantile median
+        if (hist[floor_bin] < min_floor_points) {
             std::vector<double> z_sorted = z_all;
             size_t q_idx = static_cast<size_t>(floor_quantile * (z_sorted.size() - 1));
             std::nth_element(z_sorted.begin(), z_sorted.begin() + q_idx, z_sorted.end());
@@ -269,7 +310,7 @@ bool normalize_floor_in_saved_map(PointCloudXYZI::Ptr cloud, double floor_quanti
         return false;
     }
 
-    // Histogram mode (global) for robust floor Z after rotation
+    // Histogram — lowest-peak detection (same strategy as PCA loop)
     double z_min_val = *std::min_element(z_all.begin(), z_all.end());
     double z_max_val = *std::max_element(z_all.begin(), z_all.end());
     double z_range = z_max_val - z_min_val;
@@ -282,15 +323,31 @@ bool normalize_floor_in_saved_map(PointCloudXYZI::Ptr cloud, double floor_quanti
         bin = std::min(bin, n_bins - 1);
         hist[bin]++;
     }
-    int mode_bin = 0;
-    int mode_count = 0;
+
+    // Smooth and find lowest significant peak
+    std::vector<double> smooth(n_bins, 0.0);
+    const int hw = 5;
     for (int b = 0; b < n_bins; ++b) {
-        if (hist[b] > mode_count) {
-            mode_count = hist[b];
-            mode_bin = b;
+        double s = 0.0; int c = 0;
+        for (int k = std::max(0, b - hw); k <= std::min(n_bins - 1, b + hw); ++k) {
+            s += hist[k]; c++;
         }
+        smooth[b] = s / c;
     }
-    double floor_z_est = z_min_val + (mode_bin + 0.5) * bin_width;
+    double smooth_peak = *std::max_element(smooth.begin(), smooth.end());
+    int floor_bin = 0;
+    for (int b = 0; b < n_bins; ++b) {
+        if (smooth[b] >= 0.30 * smooth_peak) { floor_bin = b; break; }
+    }
+    // Refine to local max ±10 bins
+    {
+        int best = floor_bin; double best_val = smooth[floor_bin];
+        for (int b = std::max(0, floor_bin - 10); b <= std::min(n_bins - 1, floor_bin + 10); ++b) {
+            if (smooth[b] > best_val) { best_val = smooth[b]; best = b; }
+        }
+        floor_bin = best;
+    }
+    double floor_z_est = z_min_val + (floor_bin + 0.5) * bin_width;
 
     // Collect floor points near mode for accurate median
     std::vector<double> floor_z;
@@ -1144,6 +1201,14 @@ int main(int argc, char** argv)
                         // state_out.rot.normalize();
                         state_out.acc = -rot_init.transpose() * state_out.gravity;
                     }
+                    // Shift world-frame origin down so z=0 is at the floor
+                    // plane (lidar_height metres below the LiDAR).
+                    if (lidar_height > 0.0) {
+                        state_in.pos(2)  = lidar_height;
+                        state_out.pos(2) = lidar_height;
+                        ROS_INFO_STREAM("[init] z-origin shifted by +" << lidar_height
+                                        << " m so floor = z=0");
+                    }
                     kf_input.change_x(state_in);
                     kf_output.change_x(state_out);
                     p_imu->gravity_align_ = true;
@@ -1172,6 +1237,10 @@ int main(int argc, char** argv)
                         state_out.acc *= -1;
                     }
                     // kf_input.change_x(state_in);
+                    // Shift z-origin for non-IMU mode as well
+                    if (lidar_height > 0.0) {
+                        state_out.pos(2) = lidar_height;
+                    }
                     kf_output.change_x(state_out);
                     p_imu->gravity_align_ = true;
                 }
@@ -1634,6 +1703,27 @@ int main(int argc, char** argv)
 
         if (pcd_level_floor) {
             normalize_floor_in_saved_map(pcl_wait_save, pcd_floor_quantile, pcd_floor_target_z, pcd_floor_min_points);
+        }
+
+        // Z band filter: keep only points in [z_floor, z_ceiling]
+        bool apply_z_floor   = (pcd_z_floor   > -99.0);
+        bool apply_z_ceiling = (pcd_z_ceiling  <  99.0);
+        if (apply_z_floor || apply_z_ceiling) {
+            float z_lo = apply_z_floor   ? static_cast<float>(pcd_z_floor)   : -std::numeric_limits<float>::max();
+            float z_hi = apply_z_ceiling ? static_cast<float>(pcd_z_ceiling) :  std::numeric_limits<float>::max();
+            size_t before = pcl_wait_save->size();
+            PointCloudXYZI::Ptr filtered(new PointCloudXYZI());
+            filtered->points.reserve(before);
+            for (const auto& pt : pcl_wait_save->points) {
+                if (pt.z >= z_lo && pt.z <= z_hi) {
+                    filtered->points.push_back(pt);
+                }
+            }
+            filtered->width = filtered->points.size();
+            filtered->height = 1;
+            filtered->is_dense = true;
+            pcl_wait_save = filtered;
+            ROS_INFO_STREAM("[pcd_save] z_band filter [" << z_lo << ", " << z_hi << "]: " << before << " -> " << pcl_wait_save->size() << " points");
         }
 
         pcl::PCDWriter pcd_writer;

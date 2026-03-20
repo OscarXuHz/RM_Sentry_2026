@@ -23,6 +23,7 @@ extern double filter_size_surf_min, filter_size_map_min, fov_deg;
 extern double cube_len; 
 extern float  DET_RANGE;
 extern bool   imu_en, gravity_align, non_station_start;
+extern double lidar_height;
 extern double imu_time_inte;
 extern double laser_point_cov, acc_norm;
 extern double acc_cov_input, gyr_cov_input, vel_cov;
@@ -40,6 +41,8 @@ extern double pcd_floor_quantile;
 extern double pcd_floor_target_z;
 extern int pcd_floor_min_points;
 extern int pcd_pca_max_iterations;
+extern double pcd_z_floor;
+extern double pcd_z_ceiling;
 extern shared_ptr<Preprocess> p_pre;
 extern double time_lag_imu_to_lidar;
 

@@ -2,18 +2,17 @@
 <launch>
   <!-- arguments -->
   <arg name="nodelet_manager" default="velodyne_nodelet_manager" />
-  <arg name="points_topic" default="/3Dlidar" />
+  <arg name="points_topic" default="/livox/lidar" />
   <!-- input clouds are transformed in odom_child_frame, and then localization is performed in that frame -->
   <!-- this is useful to match the LIDAR and IMU coodinate systems -->
   <arg name="odom_child_frame_id" default="aft_mapped" />
 
   <!-- optional arguments -->
   <arg name="use_imu" default="true" />
-  <arg name="invert_imu_acc" default="false" />
+  <arg name="invert_imu_acc" default="true" />
   <arg name="invert_imu_gyro" default="false" />
   <arg name="use_global_localization" default="false" /> 
-  <!-- Fix 32: Use _3 IMU (same as Point-LIO mapping) to eliminate systematic tilt -->
-  <arg name="imu_topic" default="/livox/imu_192_168_1_3_filtered" />
+  <arg name="imu_topic" default="/livox/imu_filtered" />
   <arg name="enable_robot_odometry_prediction" value="false" />
   <arg name="robot_odom_frame_id" value="aft_mapped" />
   <arg name="plot_estimation_errors" value="false" />
@@ -25,7 +24,7 @@
 
     <!-- globalmap_server_nodelet -->
     <node pkg="nodelet" type="nodelet" name="globalmap_server_nodelet" args="load hdl_localization/GlobalmapServerNodelet $(arg nodelet_manager)">
-      <param name="globalmap_pcd" value="/home/sentry_train_test/AstarTraining/HIT_Integrated_test/pcd/current.pcd" />
+      <param name="globalmap_pcd" value="$(find hdl_graph_slam)/map/Mar16.pcd" />
       <param name="convert_utm_to_local" value="true" />
       <param name="downsample_resolution" value="0.1" />
     </node>
@@ -62,7 +61,7 @@
       <param name="specify_init_pose" value="true" />
       <param name="init_pos_x" value="6.798271894454956" />
       <param name="init_pos_y" value="-1.80238938331604" />
-      <param name="init_pos_z" value="0.3" />  <!-- Fix 33c: LiDAR height above ground (PCD floor shifted to z=0) -->
+      <param name="init_pos_z" value="0.0" />
       <param name="init_ori_w" value="0.7017" />
       <param name="init_ori_x" value="0.0" />
       <param name="init_ori_y" value="0.0" />

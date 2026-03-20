@@ -47,11 +47,6 @@ void tracking_manager::init(ros::NodeHandle &nh)
     global_replan_pub = nh.advertise<std_msgs::Bool>("/replan_flag", 1);
     robot_cur_yaw_pub = nh.advertise<std_msgs::Float64>("/robot_cur_yaw_reg", 1);
 
-    nh.param("tracking_node/use_omega_output", use_omega_output_, false);
-    if (use_omega_output_) {
-        ROS_WARN("[tracking_manager] Omega output mode ENABLED: slaver_speed fields = (omega, vy_body, vx_body)");
-    }
-
     map_inv_resolution = 1.0 / map_resolution;
     map_upper_point(0) = map_lower_point(0) + map_x_size;
     map_upper_point(1) = map_lower_point(1) + map_y_size;
@@ -339,17 +334,10 @@ void tracking_manager::rcvLidarIMUPosCallback(const nav_msgs::OdometryConstPtr &
         optimal_differential_speed = getDifferentialModelSpeed(v_ctrl, angular_ctrl, robot_wheel_tread);
         publishMbotOptimalSpeed(optimal_differential_speed);
 
-        if (use_omega_output_) {
-            // omega mode (new robot): (ω=0, unused, v=0, mode)
-            MPC_Control(0) = 0.0;               // ω = 0 (stopped)
-            MPC_Control(1) = 0.0;               // unused
-            MPC_Control(2) = 0.0;               // v = 0
-        } else {
-            // omni mode (old robot): (heading=current, lidar_yaw, v=0, mode)
-            MPC_Control(0) = phi_ctrl;           // keep current heading
-            MPC_Control(1) = phi_ctrl;           // same as heading → delta=0 → vx=0, vy=0
-            MPC_Control(2) = 0.0;               // v = 0
-        }
+        // Stopped: all zeros (vx=0, vy=0, z_angle=0)
+        MPC_Control(0) = 0.0;
+        MPC_Control(1) = 0.0;
+        MPC_Control(2) = 0.0;
         MPC_Control(3) = checkMotionMode();
         in_bridge = false;
         publishSentryOptimalSpeed(MPC_Control);
@@ -424,23 +412,14 @@ void tracking_manager::rcvLidarIMUPosCallback(const nav_msgs::OdometryConstPtr &
 
 
     Eigen::Vector4d MPC_Control;
-    if (use_omega_output_) {
-        // omega mode (new robot): pack (ω, unused, v, mode)
-        // hit_bridge will send: vx = v, vy = 0, z_angle = ω
-        MPC_Control(0) = angular_ctrl;          // ω → angle_target field
-        MPC_Control(1) = 0.0;                   // unused → angle_current field
-        MPC_Control(2) = v_ctrl;                // v → line_speed field
-    } else {
-        // omni mode (old robot, default): pack (heading, chassis_yaw, v, mode)
-        // hit_bridge decomposes v into chassis body-frame vx/vy.
-        // CRITICAL: Must use CHASSIS yaw (robot_cur_yaw), NOT gimbal/LiDAR yaw.
-        // The MPC solves heading relative to chassis yaw, so the decomposition
-        // must also use chassis yaw.  Using gimbal yaw introduced the
-        // gimbal-chassis yaw difference as an error, causing wrong vx/vy
-        // directions and speed oscillation when the gimbal rotates.
-        MPC_Control(0) = phi_ctrl + robot_add_yaw;
-        MPC_Control(1) = robot_cur_yaw + robot_add_yaw;  // chassis yaw (was: robot_lidar_yaw)
-        MPC_Control(2) = v_ctrl;
+    {
+        // Direct vx/vy mode: decompose v into gimbal-frame vx/vy here,
+        // then pass through hit_bridge unchanged.
+        // delta = desired_heading - gimbal_yaw (both with yaw offset)
+        double delta = (phi_ctrl + robot_add_yaw) - (robot_lidar_yaw + robot_add_yaw);
+        MPC_Control(0) = v_ctrl * std::cos(delta);  // gimbal-frame vx → angle_target field
+        MPC_Control(1) = v_ctrl * std::sin(delta);  // gimbal-frame vy → angle_current field
+        MPC_Control(2) = 0.0;                       // z_angle (angular vel) → line_speed field
     }
     MPC_Control(3) = checkMotionMode();
 

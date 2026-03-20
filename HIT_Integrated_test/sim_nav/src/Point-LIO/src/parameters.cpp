@@ -15,6 +15,7 @@ double filter_size_surf_min, filter_size_map_min, fov_deg;
 double cube_len; 
 float  DET_RANGE;
 bool   imu_en, gravity_align, non_station_start;
+double lidar_height;
 double imu_time_inte;
 double laser_point_cov, acc_norm;
 double vel_cov, acc_cov_input, gyr_cov_input;
@@ -31,6 +32,8 @@ bool pcd_level_floor;
 double pcd_floor_quantile, pcd_floor_target_z;
 int pcd_floor_min_points;
 int pcd_pca_max_iterations;
+double pcd_z_floor;
+double pcd_z_ceiling;
 shared_ptr<Preprocess> p_pre;
 double time_lag_imu_to_lidar = 0.0;
 
@@ -61,6 +64,7 @@ void readParameters(ros::NodeHandle &nh)
   nh.param<double>("mapping/fov_degree",fov_deg,180);
   nh.param<bool>("mapping/imu_en",imu_en,true);
   nh.param<bool>("mapping/start_in_aggressive_motion",non_station_start,false);
+  nh.param<double>("mapping/lidar_height", lidar_height, 0.0);
   nh.param<bool>("mapping/extrinsic_est_en",extrinsic_est_en,true);
   nh.param<double>("mapping/imu_time_inte",imu_time_inte,0.005);
   nh.param<double>("mapping/lidar_meas_cov",laser_point_cov,0.1);
@@ -107,5 +111,7 @@ void readParameters(ros::NodeHandle &nh)
   nh.param<double>("pcd_save/floor_target_z", pcd_floor_target_z, 0.0);
   nh.param<int>("pcd_save/min_floor_points", pcd_floor_min_points, 1000);
   nh.param<int>("pcd_save/pca_max_iterations", pcd_pca_max_iterations, 5);
+  nh.param<double>("pcd_save/z_floor", pcd_z_floor, -100.0);
+  nh.param<double>("pcd_save/z_ceiling", pcd_z_ceiling, 100.0);
 }
 

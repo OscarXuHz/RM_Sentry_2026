@@ -1,13 +1,8 @@
 <launch>
-    <!-- Fix 32: Filter BOTH IMUs so localization can use the mapping IMU (_3) -->
-    <node pkg="bot_sim" type="imu_filter" name="imu_filter_105">
-        <param name="input_imu_topic" type="string" value="/livox/imu_192_168_1_105" />
-        <param name="output_imu_topic" type="string" value="/livox/imu_192_168_1_105_filtered" />
+    <node pkg="bot_sim" type="imu_filter" name="imu_filter">
+        <param name="input_imu_topic" type="string" value="/livox/imu" />
+        <param name="output_imu_topic" type="string" value="/livox/imu_filtered" />
         <param name="gravity" type="double" value="9.81" />
-    </node>
-    <node pkg="bot_sim" type="imu_filter" name="imu_filter_3">
-        <param name="input_imu_topic" type="string" value="/livox/imu_192_168_1_3" />
-        <param name="output_imu_topic" type="string" value="/livox/imu_192_168_1_3_filtered" />
-        <param name="gravity" type="double" value="9.81" />
+        <param name="output_frame_id" type="string" value="" />
     </node>
 </launch>   

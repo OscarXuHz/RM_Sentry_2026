@@ -1,9 +1,9 @@
 common:
-    lid_topic:  "/livox/lidar_192_168_1_3" 
+    lid_topic:  "/livox/lidar" 
     # lid_topic:  "/livox/lidar"
     # imu_topic: "/livox/imu"
     # 老订阅 
-    imu_topic:  "/livox/imu_192_168_1_3"
+    imu_topic:  "/livox/imu"
 
     con_frame: false # true: if you need to combine several LiDAR frames into one
     con_frame_num: 1 # the number of frames combined
@@ -17,7 +17,7 @@ preprocess:
     lidar_type: 1 
     scan_line: 6
     timestamp_unit: 1           # the unit of time/t field in the PointCloud2 rostopic: 0-second, 1-milisecond, 2-microsecond, 3-nanosecond.
-    blind: 1.0 
+    blind: 1.2 
 
 mapping:
     imu_en: true
