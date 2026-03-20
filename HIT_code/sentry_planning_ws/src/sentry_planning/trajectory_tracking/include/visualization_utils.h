@@ -17,12 +17,15 @@
 #include <nav_msgs/Odometry.h>
 #include <nav_msgs/Path.h>
 #include <visualization_msgs/Marker.h>
+#include <geometry_msgs/PoseStamped.h>
 
 
 class Vislization
 {
 public:
     ros::Publisher candidate_path_vis_pub, reference_path_vis_pub, obs_center_vis_pub;
+    ros::Publisher mpc_predicted_path_pub;   // nav_msgs::Path for MPC predicted trajectory
+    ros::Publisher mpc_reference_path_pub;   // nav_msgs::Path for MPC reference trajectory
 
     void init(ros::NodeHandle &nh);
 
@@ -31,6 +34,10 @@ public:
     void visReferenceTrajectory(std::vector<Eigen::Vector3d> points);
 
     void visObsCenterPoints(std::vector<std::vector<Eigen::Vector3d>> points);
+
+    void publishMPCPredictedPath(const std::vector<Eigen::Vector4d>& states);
+
+    void publishMPCReferencePath(const std::vector<Eigen::Vector3d>& refs);
 
 };
 

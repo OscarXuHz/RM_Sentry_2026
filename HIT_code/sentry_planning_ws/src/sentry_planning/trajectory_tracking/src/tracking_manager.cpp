@@ -252,17 +252,10 @@ void tracking_manager::rcvLidarIMUPosCallback(const nav_msgs::OdometryConstPtr &
     geometry_msgs::Twist twist;
     pose = state->pose.pose;
     twist = state->twist.twist;
-    robot_cur_position(0) = pose.position.x;
-    robot_cur_position(1) = pose.position.y;
-    robot_cur_position(2) = 0.0;
 
-    global_map->odom_position(0) = pose.position.x;
-    global_map->odom_position(1) = pose.position.y;
-    global_map->odom_position(2) = pose.position.z;
-
-    double robot_x = pose.position.x;
-    double robot_y = pose.position.y;
-
+    // Compute LiDAR yaw first so we can correct the reported position to the
+    // chassis / gimbal centre. Offset source: aft_mapped→gimbal_frame TF in
+    // real_robot_transform.cpp: translation = (-0.011, -0.17166, 0) m in LiDAR frame.
     double x = pose.orientation.x;
     double y = pose.orientation.y;
     double z = pose.orientation.z;
@@ -271,6 +264,28 @@ void tracking_manager::rcvLidarIMUPosCallback(const nav_msgs::OdometryConstPtr &
     double cosy_cosp = +1.0 - 2.0 * (y * y + z * z);
     double robot_add_yaw = 0.0;  // TODO 这里可能会有点问题，在非陀螺模式下不保证底盘一定在+-180度内，如果出现异常情况的话会疯转
     double robot_lidar_yaw = atan2f(siny_cosp, cosy_cosp);
+
+    // Correct LiDAR (aft_mapped) position to chassis / gimbal centre.
+    // chassis_pos = lidar_pos + R(lidar_yaw) * [DX, DY]
+    static constexpr double LIDAR_TO_CHASSIS_DX = -0.011;    // [m] LiDAR→chassis in LiDAR x
+    static constexpr double LIDAR_TO_CHASSIS_DY = -0.17166;  // [m] LiDAR→chassis in LiDAR y
+    double chassis_x = pose.position.x
+                       + std::cos(robot_lidar_yaw) * LIDAR_TO_CHASSIS_DX
+                       - std::sin(robot_lidar_yaw) * LIDAR_TO_CHASSIS_DY;
+    double chassis_y = pose.position.y
+                       + std::sin(robot_lidar_yaw) * LIDAR_TO_CHASSIS_DX
+                       + std::cos(robot_lidar_yaw) * LIDAR_TO_CHASSIS_DY;
+
+    robot_cur_position(0) = chassis_x;
+    robot_cur_position(1) = chassis_y;
+    robot_cur_position(2) = 0.0;
+
+    global_map->odom_position(0) = chassis_x;
+    global_map->odom_position(1) = chassis_y;
+    global_map->odom_position(2) = pose.position.z;
+
+    double robot_x = chassis_x;
+    double robot_y = chassis_y;
 
     double robot_yaw_temp;
     if (has_wheel_state_) {
@@ -292,7 +307,7 @@ void tracking_manager::rcvLidarIMUPosCallback(const nav_msgs::OdometryConstPtr &
     double phi_ctrl = 0.0;
     double acc_ctrl = 0.0;
     double angular_ctrl = 0.0;
-    Eigen::Vector4d predict_input;
+    Eigen::Vector4d predict_input = Eigen::Vector4d::Zero();  // init to zero to avoid garbage if solver fails
 
     double line_speed_temp = sqrt(pow(abs(twist.linear.x), 2) + pow(abs(twist.linear.y), 2));
     if (has_wheel_state_) {
@@ -348,7 +363,11 @@ void tracking_manager::rcvLidarIMUPosCallback(const nav_msgs::OdometryConstPtr &
     }
 
     double target_distance = (localplanner->target_point - robot_cur_position).norm();
-    if(target_distance < 0.3 && (localplanner->motion_mode != 8)){
+    // Pre-emptive replan: request next trajectory before stopping so stop gap is minimal.
+    if(target_distance < 1.0 && !arrival_goal && (localplanner->motion_mode != 8)){
+        replan_now = true;
+    }
+    if(target_distance < 0.1 && (localplanner->motion_mode != 8)){
         ROS_WARN("[MPC] arrival_goal!");
         arrival_goal = true;
     }
@@ -364,6 +383,7 @@ void tracking_manager::rcvLidarIMUPosCallback(const nav_msgs::OdometryConstPtr &
             ROS_WARN("[TrackingManager] solveNMPC failed, skipping this cycle");
             solver_status_msg.data = false;
             m_solver_status_pub.publish(solver_status_msg);
+            return;
         } else {
         solver_status_msg.data = true;
         m_solver_status_pub.publish(solver_status_msg);
@@ -378,6 +398,8 @@ void tracking_manager::rcvLidarIMUPosCallback(const nav_msgs::OdometryConstPtr &
         vislization_util->visCandidateTrajectory(state_deque);
         vislization_util->visReferenceTrajectory(localplanner->ref_trajectory);
         vislization_util->visObsCenterPoints(localplanner->obs_points);
+        vislization_util->publishMPCPredictedPath(state_deque);
+        vislization_util->publishMPCReferencePath(localplanner->ref_trajectory);
 
         replan_check_flag.insert(replan_check_flag.begin(), collision);
         if(replan_check_flag.size() > 25){  // 检测num帧的数据防止碰撞，实际检测秒数为num/100帧
@@ -413,10 +435,15 @@ void tracking_manager::rcvLidarIMUPosCallback(const nav_msgs::OdometryConstPtr &
         MPC_Control(1) = 0.0;                   // unused → angle_current field
         MPC_Control(2) = v_ctrl;                // v → line_speed field
     } else {
-        // omni mode (old robot, default): pack (heading, lidar_yaw, v, mode)
-        // hit_bridge will decompose v into body vx/vy and send z_angle = 0
+        // omni mode (old robot, default): pack (heading, chassis_yaw, v, mode)
+        // hit_bridge decomposes v into chassis body-frame vx/vy.
+        // CRITICAL: Must use CHASSIS yaw (robot_cur_yaw), NOT gimbal/LiDAR yaw.
+        // The MPC solves heading relative to chassis yaw, so the decomposition
+        // must also use chassis yaw.  Using gimbal yaw introduced the
+        // gimbal-chassis yaw difference as an error, causing wrong vx/vy
+        // directions and speed oscillation when the gimbal rotates.
         MPC_Control(0) = phi_ctrl + robot_add_yaw;
-        MPC_Control(1) = robot_lidar_yaw;
+        MPC_Control(1) = robot_cur_yaw + robot_add_yaw;  // chassis yaw (was: robot_lidar_yaw)
         MPC_Control(2) = v_ctrl;
     }
     MPC_Control(3) = checkMotionMode();
@@ -534,6 +561,7 @@ void tracking_manager::rcvGazeboRealPosCallback(const gazebo_msgs::ModelStatesCo
             ROS_WARN("[TrackingManager] solveNMPC failed, skipping this cycle");
             solver_status_msg.data = false;
             m_solver_status_pub.publish(solver_status_msg);
+            return;
         } else {
         solver_status_msg.data = true;
         m_solver_status_pub.publish(solver_status_msg);
@@ -546,6 +574,8 @@ void tracking_manager::rcvGazeboRealPosCallback(const gazebo_msgs::ModelStatesCo
         vislization_util->visCandidateTrajectory(state_deque);
         vislization_util->visReferenceTrajectory(localplanner->ref_trajectory);
         vislization_util->visObsCenterPoints(localplanner->obs_points);
+        vislization_util->publishMPCPredictedPath(state_deque);
+        vislization_util->publishMPCReferencePath(localplanner->ref_trajectory);
 
         replan_check_flag.insert(replan_check_flag.begin(), collision);
         if(replan_check_flag.size() > 250){ // 检测num帧的数据防止碰撞，实际检测秒数为num/800帧

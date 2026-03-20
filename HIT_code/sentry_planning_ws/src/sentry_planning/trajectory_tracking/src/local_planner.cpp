@@ -4,6 +4,7 @@
 
 #include "../include/local_planner.h"
 #include <math.h>
+#include <cmath>
 #include <numeric>
 #include <algorithm>
 #include <iostream>
@@ -137,11 +138,13 @@ void LocalPlanner::linearation(double time, double robot_cur_yaw)
                             Eigen::Vector3d temp_pos = global_map->gridIndex2coord(temp_idx);
                             obs_point_temp.push_back(temp_pos);
                             if(global_map->isLocalOccupied(pos_idx.x() + i, pos_idx.y() + j, pos_idx.z())){
+                                // Dynamic obstacle from pointcloud — type 1, trigger local avoidance
                                 obs_point_temp_t.push_back(std::make_pair(1, temp_pos));
                                 unknown_obs_exist = true;
                             }else{
-                                obs_point_temp_t.push_back(std::make_pair(1, temp_pos));
-                                unknown_obs_exist = true;
+                                // Static obstacle from map — type 0, larger threshold (handled by global planner)
+                                obs_point_temp_t.push_back(std::make_pair(0, temp_pos));
+                                // Don't set unknown_obs_exist — static obstacles alone don't need local avoidance
                             }
                         }
                     }
@@ -156,19 +159,41 @@ void LocalPlanner::linearation(double time, double robot_cur_yaw)
         obs_num += obs_point_temp.size();
     }
 
-    if(!unknown_obs_exist){  // 周围没有未知的动态障碍物时不进行局部避障
-        for(int i = 0; i<obs_points_t.size(); i++){
-            obs_points_t[i].clear();
-        }
-    }
-    mpcInterface_.obsConstraintPtr_->timeTrajectory_ = reference_time;  // 障碍物约束参考轨迹设置
+    // NOTE: The original code cleared ALL obstacle constraints (including static
+    // walls) when no dynamic obstacles were nearby.  This caused the MPC to be
+    // completely blind to walls, allowing the robot to crash into them.
+    // Static obstacle constraints are now always kept active so the MPC can
+    // push the robot away from walls even when no point-cloud obstacles exist.
+    // Dynamic obstacles (type 1) still receive a tighter penalty in the solver
+    // via the type tag on each obs_point.
+    (void)unknown_obs_exist;  // retained for future per-type penalty tuning
+    // Update obstacle data via shared pointer - the solver's internal constraint
+    // sees these updates through the shared_ptr without needing to recreate.
+    mpcInterface_.obsConstraintPtr_->timeTrajectory_ = reference_time;
     mpcInterface_.obsConstraintPtr_->obs_points_t_ = obs_points_t;
 
-    ocs2::RelaxedBarrierPenalty::Config barriercollisionPenaltyConfig(0.15, 0.1);
-    stateCollisionSoftConstraintPtr = std::make_unique<ocs2::StateSoftConstraint>(std::make_unique<SentryCollisionConstraint>(mpcInterface_.obsConstraintPtr_), std::make_unique<ocs2::RelaxedBarrierPenalty>(barriercollisionPenaltyConfig));
-    bool trues = mpcInterface_.problem_.stateSoftConstraintPtr->erase("stateCollisionBounds");  // 加入障碍物躲避约束
-    mpcInterface_.problem_.stateSoftConstraintPtr->add("stateCollisionBounds", std::move(stateCollisionSoftConstraintPtr));
-    mpcSolverPtr_.reset(new ocs2::SqpMpc(mpcInterface_.mpcSettings(), mpcInterface_.sqpSettings(), mpcInterface_.getOptimalControlProblem(), mpcInterface_.getInitializer()));
+    // Create solver ONCE on first call.  Recreating every cycle caused SIGSEGV:
+    // OCS2 SqpMpc uses nThreads=2; if the solver fails mid-solve, its threads
+    // may still be running when reset() destroys the object -> use-after-free.
+    if (!mpcSolverPtr_) {
+        ocs2::RelaxedBarrierPenalty::Config barriercollisionPenaltyConfig(2.0, 0.1);
+        stateCollisionSoftConstraintPtr = std::make_unique<ocs2::StateSoftConstraint>(std::make_unique<SentryCollisionConstraint>(mpcInterface_.obsConstraintPtr_), std::make_unique<ocs2::RelaxedBarrierPenalty>(barriercollisionPenaltyConfig));
+        mpcInterface_.problem_.stateSoftConstraintPtr->add("stateCollisionBounds", std::move(stateCollisionSoftConstraintPtr));
+
+        // ── HPIPM tuning ──────────────────────────────────────────────
+        // The OCS2 loader does NOT read HPIPM settings from task.info.
+        // Defaults are: reg_prim=1e-12 (≈0), mode=SPEED, ric_alg=0.
+        // With near-zero regularization and SPEED mode, the Riccati
+        // recursion fails on mildly ill-conditioned QPs.
+        auto& hSet = mpcInterface_.sqpSettings().hpipmSettings;
+        hSet.hpipmMode   = hpipm_mode::ROBUST;  // was SPEED
+        hSet.reg_prim    = 1e-8;                 // was 1e-12
+        mpcInterface_.sqpSettings().printSolverStatus = false;
+        ROS_INFO("[LocalPlanner] HPIPM: mode=ROBUST, reg_prim=1e-8");
+
+        mpcSolverPtr_.reset(new ocs2::SqpMpc(mpcInterface_.mpcSettings(), mpcInterface_.sqpSettings(), mpcInterface_.getOptimalControlProblem(), mpcInterface_.getInitializer()));
+        ROS_INFO("[LocalPlanner] MPC solver created (one-time init)");
+    }
 }
 
 void LocalPlanner::getFightTrackingTraj(Eigen::Vector3d state, double time, double robot_cur_yaw)
@@ -362,10 +387,15 @@ void LocalPlanner::rcvGlobalTrajectory(const trajectory_generation::trajectoryPo
 
     speed_direction = 1;
     int piece_num = polytraj->duration.size();
+    if (piece_num == 0) {
+        ROS_ERROR("[LocalPlanner] received trajectory with 0 pieces — ignoring");
+        return;
+    }
     m_polyMatrix_x.resize(piece_num, 4);
     m_polyMatrix_y.resize(piece_num, 4);
     // 设置每段轨迹的参数
 
+    bool coef_has_nan = false;
     for(int i = 0; i<piece_num; i++)
     {
         duration_time.push_back(polytraj->duration[i]);
@@ -377,9 +407,66 @@ void LocalPlanner::rcvGlobalTrajectory(const trajectory_generation::trajectoryPo
         m_polyMatrix_y(i, 1) = polytraj->coef_y[4 * i + 1];
         m_polyMatrix_y(i, 2) = polytraj->coef_y[4 * i + 2];
         m_polyMatrix_y(i, 3) = polytraj->coef_y[4 * i + 3];
+
+        // ── NaN diagnostic: check polynomial coefficients on receipt ──
+        if (!std::isfinite(polytraj->duration[i]) || polytraj->duration[i] <= 0.0) {
+            ROS_ERROR("[LocalPlanner] BAD duration[%d] = %f", i, polytraj->duration[i]);
+            coef_has_nan = true;
+        }
+        for (int c = 0; c < 4; c++) {
+            if (!std::isfinite(polytraj->coef_x[4*i+c])) {
+                ROS_ERROR("[LocalPlanner] NaN in coef_x[%d][%d] = %f", i, c, polytraj->coef_x[4*i+c]);
+                coef_has_nan = true;
+            }
+            if (!std::isfinite(polytraj->coef_y[4*i+c])) {
+                ROS_ERROR("[LocalPlanner] NaN in coef_y[%d][%d] = %f", i, c, polytraj->coef_y[4*i+c]);
+                coef_has_nan = true;
+            }
+        }
     }
+    if (coef_has_nan) {
+        ROS_ERROR("[LocalPlanner] Polynomial coefficients contain NaN/Inf — discarding trajectory");
+        reference_path.clear();
+        reference_velocity.clear();
+        duration_time.clear();
+        ref_time.clear();
+        return;
+    }
+    ROS_INFO("[LocalPlanner] Polynomial coefficients OK (pieces=%d, coef_x size=%zu, coef_y size=%zu)",
+             piece_num, polytraj->coef_x.size(), polytraj->coef_y.size());
+
     getRefTrajectory();  /// 根据轨迹的参数得到采样轨迹和采样速度
     getRefVel();
+
+    // ── NaN diagnostic: check evaluated reference path & velocity ──
+    bool eval_has_nan = false;
+    for (size_t i = 0; i < reference_path.size(); i++) {
+        if (!std::isfinite(reference_path[i].x()) || !std::isfinite(reference_path[i].y())) {
+            ROS_ERROR("[LocalPlanner] NaN in evaluated reference_path[%zu] = (%f, %f)",
+                      i, reference_path[i].x(), reference_path[i].y());
+            eval_has_nan = true;
+            break;  // don't spam
+        }
+    }
+    for (size_t i = 0; i < reference_velocity.size(); i++) {
+        if (!std::isfinite(reference_velocity[i].x()) || !std::isfinite(reference_velocity[i].y())) {
+            ROS_ERROR("[LocalPlanner] NaN in evaluated reference_velocity[%zu] = (%f, %f)",
+                      i, reference_velocity[i].x(), reference_velocity[i].y());
+            eval_has_nan = true;
+            break;
+        }
+    }
+    if (eval_has_nan) {
+        ROS_ERROR("[LocalPlanner] Evaluated trajectory has NaN — discarding");
+        reference_path.clear();
+        reference_velocity.clear();
+        duration_time.clear();
+        ref_time.clear();
+        return;
+    }
+    ROS_INFO("[LocalPlanner] Evaluated trajectory OK (path pts=%zu, vel pts=%zu)",
+             reference_path.size(), reference_velocity.size());
+
     start_tracking_time = ros::Time::now();
     m_get_global_trajectory = true;
     motion_mode = polytraj->motion_mode;
@@ -434,7 +521,12 @@ void LocalPlanner::init(ros::NodeHandle &nh, std::shared_ptr<GlobalMap> &_global
 cv::Mat LocalPlanner::swellOccMap(cv::Mat occ_map)
 {
     cv::Mat occ = cv::Mat::zeros(occ_map.rows, occ_map.cols, CV_8UC1);
-    int swell_num = (int) (0.3 / 0.1);
+    // BUG FIX: was hardcoded (0.3 / 0.1 = 3 cells) regardless of actual
+    // map resolution.  With resolution=0.05 this gave only 0.15m inflation
+    // instead of the intended 0.3m.  Use the global_map's parameters.
+    double res = (global_map) ? global_map->getResolution() : 0.05;
+    double radius = (global_map) ? global_map->getRobotRadius() : 0.3;
+    int swell_num = (int)(radius / res);
 
     for (int i = 0; i < occ_map.rows; i++) {
         for (int j = 0; j < occ_map.cols; j++) {
@@ -461,15 +553,37 @@ int LocalPlanner::solveNMPC(Eigen::Vector4d state)
         desiredInputTrajectory[i] = Eigen::Vector2d::Zero(2);
     }
     ocs2::TargetTrajectories targetTrajectories(desiredTimeTrajectory, desiredStateTrajectory, desiredInputTrajectory);
+
+    // ── NaN guard: catch corrupt reference before feeding it to the solver ──
+    for (size_t i = 0; i < planning_horizon; i++) {
+        if (!desiredStateTrajectory[i].allFinite()) {
+            ROS_ERROR("[LocalPlanner] NaN/Inf in reference state at step %zu: [%f %f %f %f]",
+                      i, desiredStateTrajectory[i](0), desiredStateTrajectory[i](1),
+                      desiredStateTrajectory[i](2), desiredStateTrajectory[i](3));
+            return 0;
+        }
+    }
+
     mpcInterface_.getReferenceManagerPtr()->setTargetTrajectories(targetTrajectories);
     mpcSolverPtr_->getSolverPtr()->setReferenceManager(mpcInterface_.getReferenceManagerPtr());
     state(2) = speed_direction * state(2);
     observation.state = state;
+
+    if (!observation.state.allFinite()) {
+        ROS_ERROR("[LocalPlanner] NaN/Inf in observation state: [%f %f %f %f]",
+                  state(0), state(1), state(2), state(3));
+        return 0;
+    }
+
     bool controllerIsUpdated;
     try {
         controllerIsUpdated = mpcSolverPtr_->run(observation.time, observation.state);
-    } catch (const std::runtime_error& e) {
-        ROS_ERROR("[LocalPlanner] SQP solver failed: %s — skipping this cycle", e.what());
+    } catch (const std::exception& e) {
+        ROS_ERROR("[LocalPlanner] SQP solver failed: %s - skipping this cycle", e.what());
+        // Clear corrupted primal solution so the next cycle cold-starts
+        // instead of warm-starting from the failed state (which would
+        // cause every subsequent solve to fail too).
+        mpcSolverPtr_->reset();
         return 0;
     }
     if (!controllerIsUpdated) {

@@ -44,9 +44,10 @@ mapping:
                    0, 0, 1 ]
 
     #edited after calibration 2026-01-12
-
-    gravity: [0.0, 0.0, -9.810]  # 保持理论值即可，实际值已通过外参补偿
-    gravity_init: [-0.141128, -0.385181, -9.806548]  # 使用优化后的重力向量
+    # REVERTED: arena-specific gravity_init overcorrects on new arenas.
+    # The default [0,0,-9.81] is correct for stationary start on flat ground;
+    # post-save floor leveling (PCA) handles residual tilt.
+    # gravity_init: [-0.141128, -0.385181, -9.806548]  # OLD arena calibration — DO NOT USE
     # extrinsic_T: [0.013474, -0.120381, -0.014952]
     # # 旋转矩阵 - 使用优化后的4×4矩阵中的左上3×3子矩阵
     # extrinsic_R: [ 0.999995, -0.002498, -0.002008,

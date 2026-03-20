@@ -26,7 +26,7 @@ class SentryCollisionConstraint final : public ocs2::StateConstraint {
     size_t getNumConstraints(ocs2::scalar_t time) const override;
     ocs2::vector_t getValue(ocs2::scalar_t time, const ocs2::vector_t& state, const ocs2::PreComputation& preComp) const override;
 
-    ocs2::VectorFunctionQuadraticApproximation getQuadraticApproximation(ocs2::scalar_t time, const ocs2::vector_t& state,
+    ocs2::VectorFunctionLinearApproximation getLinearApproximation(ocs2::scalar_t time, const ocs2::vector_t& state,
                                                              const ocs2::PreComputation& preComp) const override;
 
     size_t STATE_DIM = 4;
@@ -35,7 +35,7 @@ class SentryCollisionConstraint final : public ocs2::StateConstraint {
     std::shared_ptr<ObsConstraintSet> obsConstraintPtr_;
 
 private:
-    ocs2::scalar_t distance_threshold_ = 0.25;
+    ocs2::scalar_t distance_threshold_ = 0.36;  // was 0.25 (0.5m), now 0.6m from inflated obstacle center
 
 };
 

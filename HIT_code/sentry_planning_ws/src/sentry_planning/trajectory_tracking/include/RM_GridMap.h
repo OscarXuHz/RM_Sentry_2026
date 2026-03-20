@@ -84,6 +84,10 @@ public:
     bool isFree(const int &idx_x, const int &idx_y, const int &idx_z) const;
     bool isFree(const Eigen::Vector3i &index) const;
 
+    // Accessors for map parameters (used by local_planner swellOccMap)
+    double getRobotRadius() const { return m_robot_radius; }
+    double getResolution() const { return m_resolution; }
+
 private:
 
     ros::NodeHandle m_node;

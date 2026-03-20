@@ -1,5 +1,6 @@
 #include "../include/reference_path.h"
 #include <numeric>
+#include <cmath>
 
 
 Refenecesmooth::~Refenecesmooth(){}
@@ -12,7 +13,16 @@ void Refenecesmooth::setGlobalPath(Eigen::Vector3d velocity, std::vector<Eigen::
 {
     m_global_path = global_path;
     max_accleration = reference_amax;
-    ROS_WARN("[Reference] path size : %d", global_path.size());
+    ROS_WARN("[Reference] path size : %d", (int)global_path.size());
+
+    // Defensive: clamp absurd velocities (e.g. from uninitialized memory)
+    const double MAX_SANE_VEL = 20.0;  // m/s — well above any real robot speed
+    for (int k = 0; k < 3; k++) {
+        if (!std::isfinite(velocity[k]) || std::abs(velocity[k]) > MAX_SANE_VEL) {
+            ROS_WARN("[Reference] clamping insane state_vel[%d] = %e → 0", k, velocity[k]);
+            velocity[k] = 0.0;
+        }
+    }
     state_vel = velocity;
     desire_veloity = desire_speed;
     isxtl = xtl;
@@ -110,6 +120,14 @@ void Refenecesmooth::solvePolyMatrix()
         return;
     }
 
+    ROS_DEBUG("[Reference] solvePolyMatrix ENTER: N=%d, path_size=%zu, trap_time_size=%zu",
+             (int)(m_global_path.size()-1), m_global_path.size(), m_trapezoidal_time.size());
+    // Print first two waypoints and first trapezoidal time
+    ROS_DEBUG("[Reference]   path[0]=(%.4f,%.4f) path[1]=(%.4f,%.4f) t[0]=%.6f state_vel=(%.4f,%.4f)",
+             m_global_path[0].x(), m_global_path[0].y(),
+             m_global_path[1].x(), m_global_path[1].y(),
+             m_trapezoidal_time[0], state_vel[0], state_vel[1]);
+
     reset(m_global_path.size() - 1);
     m_bandedMatrix.reset();
     m_bandedMatrix(0, 0) = 2 * m_trapezoidal_time[0];
@@ -149,9 +167,21 @@ void Refenecesmooth::solvePolyMatrix()
     m_bandedMatrix.solve(b);
     m_bandedMatrix.solve(b2);
 
+    // ── NaN diagnostic: check spline second-derivative solve results ──
+    ROS_DEBUG("[Reference] banded solve done. b[0]=%f b[N]=%f b2[0]=%f b2[N]=%f",
+             b(0,0), b(N,0), b2(0,0), b2(N,0));
+    for (int i = 0; i <= N; i++) {
+        if (!std::isfinite(b(i, 0)) || !std::isfinite(b2(i, 0))) {
+            ROS_ERROR("[Reference] NaN in spline solve: b(%d)=%f  b2(%d)=%f", i, b(i,0), i, b2(i,0));
+        }
+    }
 
     // 解得的中间变量矩阵m1m2,用于求解系数矩阵 y = a + bx + cx2 + dx3
     for(int i = 0; i < N; i++){
+        if (m_trapezoidal_time[i] <= 1e-15) {
+            ROS_ERROR("[Reference] ZERO trapezoidal_time[%d] = %e — clamping to 0.01", i, m_trapezoidal_time[i]);
+            m_trapezoidal_time[i] = 0.01;  // prevent division by zero
+        }
         m_polyMatrix_x(i, 0) = (b(i + 1, 0) - b(i, 0)) / (6 * m_trapezoidal_time[i]);
         m_polyMatrix_x(i, 1) = b(i, 0) / 2;
         m_polyMatrix_x(i, 2) = (m_global_path[i + 1].x() - m_global_path[i].x()) / m_trapezoidal_time[i] - m_trapezoidal_time[i] * (2 * b(i, 0) + b(i + 1, 0)) / 6;
@@ -162,7 +192,23 @@ void Refenecesmooth::solvePolyMatrix()
         m_polyMatrix_y(i, 2) = (m_global_path[i + 1].y() - m_global_path[i].y()) / m_trapezoidal_time[i] -
                                m_trapezoidal_time[i] * (2 * b2(i, 0) + b2(i + 1, 0)) / 6;
         m_polyMatrix_y(i, 3) = m_global_path[i].y();
+
+        // ── NaN diagnostic: check polynomial coefficient output ──
+        bool row_has_nan = false;
+        for (int c = 0; c < 4; c++) {
+            if (!std::isfinite(m_polyMatrix_x(i, c)) || !std::isfinite(m_polyMatrix_y(i, c))) {
+                row_has_nan = true;
+            }
+        }
+        if (row_has_nan) {
+            ROS_ERROR("[Reference] NaN in polyMatrix row %d: x=[%f %f %f %f] y=[%f %f %f %f] t=%f",
+                      i, m_polyMatrix_x(i,0), m_polyMatrix_x(i,1), m_polyMatrix_x(i,2), m_polyMatrix_x(i,3),
+                      m_polyMatrix_y(i,0), m_polyMatrix_y(i,1), m_polyMatrix_y(i,2), m_polyMatrix_y(i,3),
+                      m_trapezoidal_time[i]);
+        }
     }
+    ROS_DEBUG("[Reference] solvePolyMatrix EXIT: polyX[0]=[%f %f %f %f]",
+             m_polyMatrix_x(0,0), m_polyMatrix_x(0,1), m_polyMatrix_x(0,2), m_polyMatrix_x(0,3));
     return;
 }
 

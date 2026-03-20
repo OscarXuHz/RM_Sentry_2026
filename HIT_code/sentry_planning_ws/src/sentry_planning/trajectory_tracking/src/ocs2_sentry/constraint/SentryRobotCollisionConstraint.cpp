@@ -28,7 +28,7 @@ std::vector<std::pair<int, Eigen::Vector3d>> ObsConstraintSet::getObsPoints(int 
 }
 
 SentryCollisionConstraint::SentryCollisionConstraint(std::shared_ptr<ObsConstraintSet>& obsConstraintPtr)
-: StateConstraint(ocs2::ConstraintOrder::Quadratic)
+: StateConstraint(ocs2::ConstraintOrder::Linear)
 {
     obsConstraintPtr_ = obsConstraintPtr;
 }
@@ -60,14 +60,14 @@ size_t SentryCollisionConstraint::getNumConstraints(ocs2::scalar_t time) const
     return num_constraints;
 }
 
-ocs2::VectorFunctionQuadraticApproximation SentryCollisionConstraint::getQuadraticApproximation(ocs2::scalar_t time, const ocs2::vector_t& state,
+ocs2::VectorFunctionLinearApproximation SentryCollisionConstraint::getLinearApproximation(ocs2::scalar_t time, const ocs2::vector_t& state,
                                                                const ocs2::PreComputation& preComp) const
 {
     int index = obsConstraintPtr_->getPointsIndex(time);
-    std::vector<std::pair<int, Eigen::Vector3d>> obs = obsConstraintPtr_->getObsPoints(index);  // 障碍物点
+    std::vector<std::pair<int, Eigen::Vector3d>> obs = obsConstraintPtr_->getObsPoints(index);
     size_t num_constraints = getNumConstraints(time);
 
-    ocs2::VectorFunctionQuadraticApproximation constraint;
+    ocs2::VectorFunctionLinearApproximation constraint;
     constraint.f = getValue(time, state, preComp);
 
     constraint.dfdx.setZero(num_constraints, STATE_DIM);
@@ -75,13 +75,6 @@ ocs2::VectorFunctionQuadraticApproximation SentryCollisionConstraint::getQuadrat
         Eigen::Vector3d obs_point = obs[i].second;
         constraint.dfdx(i, 0) = 2 * (state[0] - obs_point[0]);
         constraint.dfdx(i, 1) = 2 * (state[1] - obs_point[1]);
-    }
-    constraint.dfdxx.resize(num_constraints);
-
-    for(int i = 0; i < num_constraints; i++){
-        constraint.dfdxx[i].setZero(STATE_DIM, STATE_DIM);
-        constraint.dfdxx[i](0, 0) = 2;
-        constraint.dfdxx[i](1, 1) = 2;
     }
     return constraint;
 }

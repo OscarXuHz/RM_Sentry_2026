@@ -12,6 +12,14 @@ void Smoother::setGlobalMap(std::shared_ptr<GlobalMap> &_global_map)
 
 void Smoother::init(std::vector<Eigen::Vector3d>& global_path, Eigen::Vector3d start_vel, double desire_speed)
 {
+    // Reset per-path obstacle cache so getObsEdge() resamples obstacles at the
+    // new control-point positions. Without this reset, replanning calls reuse
+    // obstacle data from the previous (now stale) path, allowing the smoothed
+    // path to pass through walls.
+    init_obs = false;
+    allobs.clear();
+    mid_distance.clear();
+
     pathSample(global_path, start_vel);
     if(path.size()<2){
         ROS_ERROR("[Smooth Init] path.size()<2!!  No path");
@@ -273,10 +281,13 @@ void Smoother::smoothPath()
     }
     else
     {
-        path.clear();
-        ROS_ERROR_STREAM("[Smooth Optimize] Optimization Failed: "
-                                << lbfgs::lbfgs_stderr(ret));
-
+        // Keep the original sampled path as a safe fallback instead of
+        // discarding it.  The sampled path already avoids obstacles (it comes
+        // from the topo-search + A* pruning), so it is valid for tracking.
+        ROS_WARN_STREAM("[Smooth Optimize] Optimization failed (" 
+                        << lbfgs::lbfgs_stderr(ret)
+                        << "), falling back to unsmoothed path (" 
+                        << path.size() << " pts)");
     }
 }
 
@@ -385,8 +396,8 @@ void Smoother::getObsEdge(Eigen::Vector2d xcur)
     {
         for (int j = -8; j <=8; j ++)
         {
-            int x_idx = std::max(start_idx.x() + i, 0);
-            int y_idx = std::max(start_idx.y() + j, 0);
+            int x_idx = std::min(std::max(start_idx.x() + i, 0), global_map->GLX_SIZE - 1);
+            int y_idx = std::min(std::max(start_idx.y() + j, 0), global_map->GLY_SIZE - 1);
             int z_idx = start_idx.z();
 
             Eigen::Vector3i temp_idx = {x_idx, y_idx, z_idx};

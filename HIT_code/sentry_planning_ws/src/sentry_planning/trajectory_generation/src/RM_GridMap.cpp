@@ -823,6 +823,21 @@ bool GlobalMap::isOccupied(const Eigen::Vector3i &index, bool second_height) con
     return isOccupied(index(0), index(1), index(2), second_height);
 }
 
+bool GlobalMap::isStaticOccupied(const int &idx_x, const int &idx_y, bool second_height) const
+{
+    if(second_height){
+        return (idx_x >= 0 && idx_x < GLX_SIZE && idx_y >= 0 && idx_y < GLY_SIZE &&
+                (data[idx_x * GLY_SIZE + idx_y] == 1 || GridNodeMap[idx_x][idx_y]->second_local_occupancy == true));
+    }
+    return (idx_x >= 0 && idx_x < GLX_SIZE && idx_y >= 0 && idx_y < GLY_SIZE &&
+            (data[idx_x * GLY_SIZE + idx_y] == 1));
+}
+
+bool GlobalMap::isStaticOccupied(const Eigen::Vector3i &index, bool second_height) const
+{
+    return isStaticOccupied(index(0), index(1), second_height);
+}
+
 bool GlobalMap::isLocalOccupied(const Eigen::Vector3i &index) const
 {
     return isLocalOccupied(index(0), index(1), index(2));

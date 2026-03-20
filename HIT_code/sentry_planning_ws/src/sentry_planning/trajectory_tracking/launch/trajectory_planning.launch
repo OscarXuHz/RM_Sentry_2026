@@ -1,9 +1,15 @@
 <launch>
 
-<arg name="map_resolution" default="0.05" />
+<!-- Map metadata YAML (used as standalone defaults; overridden by parent include) -->
+<arg name="map_meta_file" default="$(find trajectory_generation)/map/map_meta.yaml" />
+<arg name="map_resolution" default="$(eval float(dict(l.strip().split(': ', 1) for l in open(arg('map_meta_file')) if ': ' in l and not l.startswith('#'))['resolution']))" />
 <arg name="robot_radius" default="0.35" />
 <arg name="local_v_max" default="2.8" />
 <arg name="use_omega_output" default="false" />
+<arg name="map_x_size" default="$(eval float(dict(l.strip().split(': ', 1) for l in open(arg('map_meta_file')) if ': ' in l and not l.startswith('#'))['map_x_size']))" />
+<arg name="map_y_size" default="$(eval float(dict(l.strip().split(': ', 1) for l in open(arg('map_meta_file')) if ': ' in l and not l.startswith('#'))['map_y_size']))" />
+<arg name="map_lower_x" default="$(eval float(dict(l.strip().split(': ', 1) for l in open(arg('map_meta_file')) if ': ' in l and not l.startswith('#'))['map_lower_x']))" />
+<arg name="map_lower_y" default="$(eval float(dict(l.strip().split(': ', 1) for l in open(arg('map_meta_file')) if ': ' in l and not l.startswith('#'))['map_lower_y']))" />
 
 <node pkg="tracking_node" name="tracking_node" type="tracking_node" output="screen" required = "true">
     <remap from="/odometry_imu" to="/odom_local" />
@@ -33,11 +39,11 @@
     <param name="tracking_node/taskFile" type="string" value="$(find tracking_node)/cfg/task.info"/>
     <param name="tracking_node/map_resolution" value="$(arg map_resolution)"/>
 
-    <param name="tracking_node/map_lower_point_x" value="-3.405"/>
-    <param name="tracking_node/map_lower_point_y" value="-5.838"/>
+    <param name="tracking_node/map_lower_point_x" value="$(arg map_lower_x)"/>
+    <param name="tracking_node/map_lower_point_y" value="$(arg map_lower_y)"/>
     <param name="tracking_node/map_lower_point_z" value="0.0"/>
-    <param name="tracking_node/map_x_size" value="10.0"/>
-    <param name="tracking_node/map_y_size" value="10.0"/>
+    <param name="tracking_node/map_x_size" value="$(arg map_x_size)"/>
+    <param name="tracking_node/map_y_size" value="$(arg map_y_size)"/>
     <param name="tracking_node/map_z_size" value="2.0"/>
     <param name="tracking_node/search_height_min" value="0.1"/>
     <param name="tracking_node/search_height_max" value="1.2"/>

@@ -28,6 +28,14 @@ void TopoSearcher::createLocalGraph(Eigen::Vector3d start, Eigen::Vector3d end, 
     }
     m_graph.clear();
 
+    // Override z with BEV map height for consistency with topo graph heights
+    {
+        Eigen::Vector3i si = global_map->coord2gridIndex(start);
+        start.z() = global_map->getHeight(si.x(), si.y());
+        Eigen::Vector3i ei = global_map->coord2gridIndex(end);
+        end.z() = global_map->getHeight(ei.x(), ei.y());
+    }
+
     GraphNode::Ptr start_node = GraphNode::Ptr(new GraphNode(start, GraphNode::Guard, 0));
     GraphNode::Ptr end_node = GraphNode::Ptr(new GraphNode(end, GraphNode::Guard, 1));
     m_graph.push_back(start_node);
@@ -57,12 +65,17 @@ void TopoSearcher::createLocalGraph(Eigen::Vector3d start, Eigen::Vector3d end, 
         Eigen::Vector3d pt = global_map->topo_keypoint[i];
         std::vector<GraphNode::Ptr> visib_guards = findVisibGuard(pt, min_distance, exist_unvisiual);
 
+        // Always add keypoints near start/end to ensure graph connectivity
+        double dist_to_start = (pt - start).head<2>().norm();
+        double dist_to_end   = (pt - end).head<2>().norm();
+        bool near_terminal = (dist_to_start < 5.0 || dist_to_end < 5.0);
+
         if(visib_guards.size() < 1) { // 这个采样点是不可见的，所以直接建立守卫点
             GraphNode::Ptr guard = GraphNode::Ptr (new GraphNode(pt, GraphNode::Guard, ++node_id));
             m_graph.push_back(guard);
 
         }else {
-            if(min_distance > 2.0){
+            if(min_distance > 2.0 || near_terminal){
                 GraphNode::Ptr guard = GraphNode::Ptr (new GraphNode(pt, GraphNode::Guard, ++node_id));
                 m_graph.push_back(guard);
             }
@@ -122,10 +135,77 @@ void TopoSearcher::createLocalGraph(Eigen::Vector3d start, Eigen::Vector3d end, 
         }
     }
 
+    // Ensure start/end nodes are connected (same fallback as createGraph)
+    for(int ti = 0; ti <= 1; ti++) {
+        if(m_graph[ti]->neighbors.empty()) {
+            double best_dist = 1e9;
+            int best_g = -1;
+            for(int g = 0; g < (int)m_graph.size(); g++) {
+                if(g == ti) continue;
+                if(m_graph[g]->type_ != GraphNode::Guard) continue;
+                double d = (m_graph[g]->pos - m_graph[ti]->pos).head<2>().norm();
+                if(d < best_dist) {
+                    Eigen::Vector3d pc;
+                    if(lineVisib(m_graph[ti]->pos, m_graph[g]->pos, 0.2, pc, 0)) {
+                        best_dist = d;
+                        best_g = g;
+                    }
+                }
+            }
+            if(best_g >= 0) {
+                m_graph[ti]->neighbors.push_back(m_graph[best_g]);
+                m_graph[best_g]->neighbors.push_back(m_graph[ti]);
+                ROS_WARN("[Topo Local] Force-connected %s node to guard %d (dist=%.2fm)",
+                         ti == 0 ? "start" : "end", m_graph[best_g]->m_id, best_dist);
+            }
+        }
+    }
+
     if(!attack_target){  // 正常模式下会直接出路径，追击模式下只用于生成局部追击轨迹
         ROS_WARN("[Topo Local]: complete sample");
         std::vector<std::vector<Eigen::Vector3d>> temp;  // 搜索可行路径并进行排序，找到最佳路径
         temp = searchPaths();
+
+        // Same connectivity fallback as createGraph
+        if(min_path.empty()) {
+            std::vector<bool> reachable(m_graph.size(), false);
+            std::queue<int> bfs_q;
+            reachable[0] = true;
+            bfs_q.push(0);
+            while(!bfs_q.empty()) {
+                int cur = bfs_q.front();
+                bfs_q.pop();
+                for(auto& nb : m_graph[cur]->neighbors) {
+                    if(!reachable[nb->m_id]) {
+                        reachable[nb->m_id] = true;
+                        bfs_q.push(nb->m_id);
+                    }
+                }
+            }
+            if(!reachable[1]) {
+                double best_dist = 1e9;
+                int best_g = -1;
+                for(int g = 0; g < (int)m_graph.size(); g++) {
+                    if(g == 1) continue;
+                    if(!reachable[g]) continue;
+                    double d = (m_graph[g]->pos - m_graph[1]->pos).head<2>().norm();
+                    if(d < best_dist) {
+                        Eigen::Vector3d pc;
+                        if(lineVisib(m_graph[1]->pos, m_graph[g]->pos, 0.2, pc, 0)) {
+                            best_dist = d;
+                            best_g = g;
+                        }
+                    }
+                }
+                if(best_g >= 0) {
+                    m_graph[1]->neighbors.push_back(m_graph[best_g]);
+                    m_graph[best_g]->neighbors.push_back(m_graph[1]);
+                    ROS_WARN("[Topo Local] Force-connected end to reachable node %d (dist=%.2fm)",
+                             m_graph[best_g]->m_id, best_dist);
+                    temp = searchPaths();  // retry
+                }
+            }
+        }
 
         ROS_DEBUG("[Topo Local]: sample time: %f", (ros::Time::now() - t1).toSec());
     }
@@ -161,6 +241,16 @@ void TopoSearcher::createGraph(Eigen::Vector3d start, Eigen::Vector3d end)
     }
     m_graph.clear();
 
+    // Override z with BEV map height so start/end are height-consistent
+    // with the rest of the topo graph (which uses BEV heights exclusively).
+    // SLAM odometry z can differ significantly from BEV heights.
+    {
+        Eigen::Vector3i si = global_map->coord2gridIndex(start);
+        start.z() = global_map->getHeight(si.x(), si.y());
+        Eigen::Vector3i ei = global_map->coord2gridIndex(end);
+        end.z() = global_map->getHeight(ei.x(), ei.y());
+    }
+
     GraphNode::Ptr start_node = GraphNode::Ptr(new GraphNode(start, GraphNode::Guard, 0));
     GraphNode::Ptr end_node = GraphNode::Ptr(new GraphNode(end, GraphNode::Guard, 1));
     m_graph.push_back(start_node);
@@ -174,12 +264,17 @@ void TopoSearcher::createGraph(Eigen::Vector3d start, Eigen::Vector3d end)
         Eigen::Vector3d pt = global_map->topo_keypoint[i];
         std::vector<GraphNode::Ptr> visib_guards = findVisibGuard(pt, min_distance, exist_unvisiual);
 
+        // Always add keypoints near start/end to ensure graph connectivity
+        double dist_to_start = (pt - start).head<2>().norm();
+        double dist_to_end   = (pt - end).head<2>().norm();
+        bool near_terminal = (dist_to_start < 5.0 || dist_to_end < 5.0);
+
         if(visib_guards.size() < 1) { // 这个采样点是不可见的，所以直接建立守卫点
             GraphNode::Ptr guard = GraphNode::Ptr (new GraphNode(pt, GraphNode::Guard, ++node_id));
             m_graph.push_back(guard);
 
         }else {
-            if(min_distance > 2.0){
+            if(min_distance > 2.0 || near_terminal){
                 GraphNode::Ptr guard = GraphNode::Ptr (new GraphNode(pt, GraphNode::Guard, ++node_id));
                 m_graph.push_back(guard);
             }
@@ -245,9 +340,83 @@ void TopoSearcher::createGraph(Eigen::Vector3d start, Eigen::Vector3d end)
         }
     }
     t2 = ros::Time::now();
+
+    // Ensure start/end nodes are connected to the graph.
+    // When start/end are far from topo keypoints (>5m) or in open areas,
+    // the sampling process may fail to connect them.
+    for(int ti = 0; ti <= 1; ti++) {
+        if(m_graph[ti]->neighbors.empty()) {
+            double best_dist = 1e9;
+            int best_g = -1;
+            for(int g = 0; g < (int)m_graph.size(); g++) {
+                if(g == ti) continue;
+                if(m_graph[g]->type_ != GraphNode::Guard) continue;
+                double d = (m_graph[g]->pos - m_graph[ti]->pos).head<2>().norm();
+                if(d < best_dist) {
+                    Eigen::Vector3d pc;
+                    if(lineVisib(m_graph[ti]->pos, m_graph[g]->pos, 0.2, pc, 0)) {
+                        best_dist = d;
+                        best_g = g;
+                    }
+                }
+            }
+            if(best_g >= 0) {
+                m_graph[ti]->neighbors.push_back(m_graph[best_g]);
+                m_graph[best_g]->neighbors.push_back(m_graph[ti]);
+                ROS_WARN("[Topo] Force-connected %s node to guard %d (dist=%.2fm)",
+                         ti == 0 ? "start" : "end", m_graph[best_g]->m_id, best_dist);
+            }
+        }
+    }
+
     std::vector<std::vector<Eigen::Vector3d>> temp;  // 搜索可行路径并进行排序，找到最佳路径
     temp = searchPaths();
-//    checkDistanceFinalPath();
+
+    // If Dijkstra failed, the end node may have neighbors but be in a
+    // disconnected component from start.  BFS from start to find all
+    // reachable nodes, then force-connect end to the nearest reachable
+    // visible guard and retry.
+    if(min_path.empty()) {
+        std::vector<bool> reachable(m_graph.size(), false);
+        std::queue<int> bfs_q;
+        reachable[0] = true;
+        bfs_q.push(0);
+        while(!bfs_q.empty()) {
+            int cur = bfs_q.front();
+            bfs_q.pop();
+            for(auto& nb : m_graph[cur]->neighbors) {
+                if(!reachable[nb->m_id]) {
+                    reachable[nb->m_id] = true;
+                    bfs_q.push(nb->m_id);
+                }
+            }
+        }
+        if(!reachable[1]) {
+            double best_dist = 1e9;
+            int best_g = -1;
+            for(int g = 0; g < (int)m_graph.size(); g++) {
+                if(g == 1) continue;
+                if(!reachable[g]) continue;
+                double d = (m_graph[g]->pos - m_graph[1]->pos).head<2>().norm();
+                if(d < best_dist) {
+                    Eigen::Vector3d pc;
+                    if(lineVisib(m_graph[1]->pos, m_graph[g]->pos, 0.2, pc, 0)) {
+                        best_dist = d;
+                        best_g = g;
+                    }
+                }
+            }
+            if(best_g >= 0) {
+                m_graph[1]->neighbors.push_back(m_graph[best_g]);
+                m_graph[best_g]->neighbors.push_back(m_graph[1]);
+                ROS_WARN("[Topo] Force-connected end to reachable node %d (dist=%.2fm)",
+                         m_graph[best_g]->m_id, best_dist);
+                temp = searchPaths();  // retry
+            } else {
+                ROS_ERROR("[Topo] End node is unreachable and no visible reachable guard found");
+            }
+        }
+    }
 
     ROS_DEBUG("[Topo]: dijkstra time: %f", (ros::Time::now() - t2).toSec());
     ROS_DEBUG("[Topo]: topo search time: %f", (ros::Time::now() - t1).toSec());
@@ -788,7 +957,7 @@ bool TopoSearcher::lineVisib(const Eigen::Vector3d& p1, const Eigen::Vector3d& p
             return false;
         }
 
-        if (global_map->isOccupied(pt_idx, pt_idy, pt_idz, second_height)){
+        if (global_map->isStaticOccupied(pt_idx, pt_idy, second_height)){
             return false;
         }
         last_height = height;

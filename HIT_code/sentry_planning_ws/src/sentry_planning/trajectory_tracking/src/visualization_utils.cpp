@@ -15,6 +15,8 @@ void Vislization::init(ros::NodeHandle &nh)
     candidate_path_vis_pub = nh.advertise<visualization_msgs::Marker>("candidate_path_vis", 1);
     reference_path_vis_pub = nh.advertise<visualization_msgs::Marker>("reference_path_vis", 1);
     obs_center_vis_pub = nh.advertise<visualization_msgs::Marker>("obs_center_vis", 1);
+    mpc_predicted_path_pub = nh.advertise<nav_msgs::Path>("/tracking/mpc_predicted_path", 1);
+    mpc_reference_path_pub = nh.advertise<nav_msgs::Path>("/tracking/mpc_reference_path", 1);
 }
 
 void Vislization::visCandidateTrajectory(std::vector<Eigen::Vector4d> nodes) {
@@ -130,4 +132,47 @@ void Vislization::visObsCenterPoints(std::vector<std::vector<Eigen::Vector3d>> p
     }
 
     obs_center_vis_pub.publish(node_vis);
+}
+
+void Vislization::publishMPCPredictedPath(const std::vector<Eigen::Vector4d>& states)
+{
+    nav_msgs::Path path;
+    path.header.frame_id = "map";
+    path.header.stamp = ros::Time::now();
+
+    for (size_t i = 0; i < states.size(); i++) {
+        geometry_msgs::PoseStamped pose;
+        pose.header = path.header;
+        pose.pose.position.x = states[i](0);
+        pose.pose.position.y = states[i](1);
+        pose.pose.position.z = 0.0;
+        // Encode heading (state[3]) into orientation quaternion
+        double yaw = states[i](3);
+        pose.pose.orientation.x = 0.0;
+        pose.pose.orientation.y = 0.0;
+        pose.pose.orientation.z = std::sin(yaw * 0.5);
+        pose.pose.orientation.w = std::cos(yaw * 0.5);
+        path.poses.push_back(pose);
+    }
+
+    mpc_predicted_path_pub.publish(path);
+}
+
+void Vislization::publishMPCReferencePath(const std::vector<Eigen::Vector3d>& refs)
+{
+    nav_msgs::Path path;
+    path.header.frame_id = "map";
+    path.header.stamp = ros::Time::now();
+
+    for (size_t i = 0; i < refs.size(); i++) {
+        geometry_msgs::PoseStamped pose;
+        pose.header = path.header;
+        pose.pose.position.x = refs[i](0);
+        pose.pose.position.y = refs[i](1);
+        pose.pose.position.z = 0.0;
+        pose.pose.orientation.w = 1.0;
+        path.poses.push_back(pose);
+    }
+
+    mpc_reference_path_pub.publish(path);
 }

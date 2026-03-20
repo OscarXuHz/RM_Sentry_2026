@@ -92,9 +92,9 @@ public:
     bool visualization_flag;
 
     /* 放在replan中机器人相关位置，速度，yaw角速度，姿态状态 */
-    Eigen::Vector3d robot_cur_position;
-    Eigen::Quaterniond robot_cur_orientation;
-    Eigen::Vector2d robot_cur_speed;
+    Eigen::Vector3d robot_cur_position = Eigen::Vector3d::Zero();
+    Eigen::Quaterniond robot_cur_orientation = Eigen::Quaterniond::Identity();
+    Eigen::Vector2d robot_cur_speed = Eigen::Vector2d::Zero();
     double robot_line_speed = 0.0;
     double robot_angular = 0.0;
     double robot_cur_yaw = 0.0;

@@ -177,7 +177,7 @@ namespace lbfgs
         bool touched = false;  // 参看迭代进度
         if(!(stp > 0.0))
         {
-            std::cout<<"stp: "<<stp<<std::endl;
+            ROS_DEBUG_STREAM("[LBFGS] invalid stp: " << stp);
             return LBFGSERR_INVALIDPARAMETERS;
         }
 
@@ -312,7 +312,7 @@ namespace lbfgs
                     x = xp;
                     g = gp;
                     ret = ls;
-                    std::cout<<"d: "<<d<<std::endl;
+                    ROS_DEBUG_STREAM("[LBFGS] search direction d: " << d.transpose());
                     break;
                 }
 

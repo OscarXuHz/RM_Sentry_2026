@@ -51,21 +51,21 @@ Q
 {
     (0,0)   80.0    ; x
     (1,1)   80.0    ; y
-    (2,2)   0.0   ; v
-    (3,3)   70.0     ; yaw
+    (2,2)   15.0    ; v (was 0.0 - enables velocity tracking)
+    (3,3)   70.0    ; yaw
 }
 
 ; control weight matrix
 R
 {
-    (0,0)   0.2     ; v
-    (1,1)   0.1     ; yaw
+    (0,0)   1.5     ; a (was 0.2 - penalizes jerk)
+    (1,1)   0.1     ; omega
 }
 
 Q_final
 {
     (0,0)   80.0    ; x
     (1,1)   80.0    ; y
-    (2,2)   0.0   ; v
-    (3,3)   80.0     ; yaw
+    (2,2)   15.0    ; v
+    (3,3)   80.0    ; yaw
 }
