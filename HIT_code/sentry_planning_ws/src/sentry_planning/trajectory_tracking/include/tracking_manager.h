@@ -29,12 +29,10 @@
 class tracking_manager
 {
 public:
-    typedef enum PLANNING_TYPE
-    {
-        FASTMOTION = 1,          // 快速移动模式
-        DISPENSE = 2             // 摆脱模式
-    } planningType;
-    planningType planningMode;
+    // (Fix 54a) DISPENSE mode removed entirely.
+    // Previously: planningType enum with FASTMOTION/DISPENSE.
+    // DISPENSE reversed velocity when stuck, but caused feedback loops.
+    // Now replaced by simple replan-on-stuck (3s timeout).
 
     typedef enum {
         red = 0,
@@ -122,6 +120,11 @@ public:
     double robot_wheel_speed = 0.0;
     double robot_wheel_yaw = 0.0;
     bool has_wheel_state_ = false;  // becomes true once /slaver/wheel_state is received
+
+    // Fix 44a: Continuous velocity heading for MPC state observation.
+    // Avoids ±π wrapping discontinuities that corrupt solver warm-start.
+    double velocity_heading_ = 0.0;
+    bool velocity_heading_init_ = false;
     double m_reference_speed;
     double target_point_arrive_radius;
     Eigen::Vector2d robot_cur_speed;
@@ -150,9 +153,6 @@ public:
 
     double last_current_yaw;
     std::vector<int> replan_check_flag;
-    std::vector<double> speed_check;
-    ros::Time start_checking_time;
-    ros::Time dispense_time;  // 摆脱模式计时
     bool arrival_goal = true;
     bool replan_now = false;
 
@@ -163,7 +163,6 @@ public:
     void publishMbotOptimalSpeed(Eigen::Vector2d &speed);
     void publishSentryOptimalSpeed(Eigen::Vector4d &speed);
     void checkReplanFlag();
-    void checkMotionNormal(double line_speed);
     int checkMotionMode();
 //    void disPenseFromNow();
     void lidarSmooth(Eigen::Vector3d position, Eigen::Vector3d velocity, double dt);

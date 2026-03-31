@@ -2,7 +2,7 @@
 resolution: 0.05
 map_x_size: 20.0
 map_y_size: 20.0
-map_lower_x: -5.765
-map_lower_y: -10.892
+map_lower_x: -13.288
+map_lower_y: -14.701
 rows: 400
 cols: 400

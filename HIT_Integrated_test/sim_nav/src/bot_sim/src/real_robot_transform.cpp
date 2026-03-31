@@ -10,6 +10,7 @@ const float PI = 3.14159265358979323846;
 std::string v_frame;
 std::string g_frame;
 std::string odom_frame;
+std::string lidar_frame;
 tf2::Quaternion qhdl;
 bool received_msg = 0;
 tf2_ros::Buffer tfBuffer;
@@ -19,7 +20,7 @@ void listenTransform()
     geometry_msgs::TransformStamped transformStamped;
 
     try {
-        transformStamped = tfBuffer.lookupTransform("aft_mapped", "map", ros::Time(0), ros::Duration(3.0));
+        transformStamped = tfBuffer.lookupTransform(lidar_frame, odom_frame, ros::Time(0), ros::Duration(3.0));
         tf2::Quaternion q(
             transformStamped.transform.rotation.x,
             transformStamped.transform.rotation.y,
@@ -31,7 +32,7 @@ void listenTransform()
         double roll, pitch, yaw;
         m.getRPY(roll, pitch, yaw);
         qhdl.setRPY(roll, pitch, 0);
-        // qhdl = qhdl.inverse();
+        qhdl = qhdl.inverse();
         ROS_INFO("Quaternion_hdl: x=%f, y=%f, z=%f, w=%f", qhdl.x(), qhdl.y(), qhdl.z(), qhdl.w());
         received_msg = 1;
     } catch (tf2::TransformException &ex) {
@@ -69,9 +70,16 @@ int main(int argc, char** argv){
     }
     if (!nh.getParam("/"+node_name+"/odom_frame", odom_frame))
     {
-        ROS_ERROR("Failed to retrieve parameter 'v_frame'");
+        ROS_ERROR("Failed to retrieve parameter 'odom_frame'");
         return -1;
     }
+    double roll_offset_deg;
+    nh.param<double>("/" + node_name + "/roll_offset_deg", roll_offset_deg, 0.0);
+    double pitch_offset_deg;
+    nh.param<double>("/" + node_name + "/pitch_offset_deg", pitch_offset_deg, 0.0);
+    double yaw_offset_deg;
+    nh.param<double>("/" + node_name + "/yaw_offset_deg", yaw_offset_deg, 0.0);
+    lidar_frame = _3DLidar_frame;
 
     tf2_ros::TransformBroadcaster broadcaster;
 
@@ -82,28 +90,29 @@ int main(int argc, char** argv){
     geometry_msgs::TransformStamped transformStamped1;
     transformStamped1.header.frame_id = _3DLidar_frame;
     transformStamped1.child_frame_id = gimbal_frame;
-    transformStamped1.transform.translation.x = -0.011;
-    transformStamped1.transform.translation.y = -0.19495+0.02329;
+    transformStamped1.transform.translation.x = 0.0;
+    transformStamped1.transform.translation.y = 0.0;
     transformStamped1.transform.translation.z = 0;
-    transformStamped1.transform.rotation.x = 0;
-    transformStamped1.transform.rotation.y = 0;
-    transformStamped1.transform.rotation.z = 0;
-    transformStamped1.transform.rotation.w = 1;
-    tf2::Quaternion qx;
-    qx.setRPY(PI, 0, 0);
-    tf2::Quaternion qz;
-    qz.setRPY(0, 0, 45 * PI/180);
-
+    
+    tf2::Quaternion sensor_offset_q;
+    sensor_offset_q.setRPY(roll_offset_deg * PI / 180.0,
+                           pitch_offset_deg * PI / 180.0,
+                           yaw_offset_deg * PI / 180.0);
+    transformStamped1.transform.rotation.x = sensor_offset_q.x();
+    transformStamped1.transform.rotation.y = sensor_offset_q.y();
+    transformStamped1.transform.rotation.z = sensor_offset_q.z();
+    transformStamped1.transform.rotation.w = sensor_offset_q.w();
+    
     ros::Rate rate(20.0);
     while (nh.ok()){
         listenTransform();
         if(received_msg){
+            tf2::Quaternion q = qhdl * sensor_offset_q;
             transformStamped1.header.stamp = ros::Time::now();
-            auto q =  qhdl;
-            // transformStamped1.transform.rotation.x = q.x();
-            // transformStamped1.transform.rotation.y = q.y();
-            // transformStamped1.transform.rotation.z = q.z();
-            // transformStamped1.transform.rotation.w = q.w();
+            transformStamped1.transform.rotation.x = q.x();
+            transformStamped1.transform.rotation.y = q.y();
+            transformStamped1.transform.rotation.z = q.z();
+            transformStamped1.transform.rotation.w = q.w();
             broadcaster.sendTransform(transformStamped1);
             received_msg = 0;
         }

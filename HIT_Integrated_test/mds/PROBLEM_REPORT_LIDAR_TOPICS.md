@@ -1,5 +1,7 @@
 # Problem Report: LiDAR Topic Mismatch
 
+> **⚠️ HISTORICAL:** This report describes the **old two-lidar** setup (`_105` + `_3`). The current HIT system uses a **single MID360** LiDAR with topic `/livox/lidar`. Both `scan_topic_left` and `scan_topic_right` now point to `/livox/lidar`. See [HIT_LIDAR_PIPELINE_REPORT.md](HIT_LIDAR_PIPELINE_REPORT.md) for the current pipeline.
+
 ## Problem Statement
 The localization process and mapping process use different LiDAR topics, and the
 point-cloud filter node has a critical bug that drops one of the two LiDARs

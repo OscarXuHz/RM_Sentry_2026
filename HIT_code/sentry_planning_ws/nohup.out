@@ -1,0 +1,94 @@
+In file included from /home/sentry/AstarTraining/RM_Sentry_2026/HIT_code/sentry_planning_ws/src/sentry_planning/trajectory_generation/src/../include/path_smooth.h:10,
+                 from /home/sentry/AstarTraining/RM_Sentry_2026/HIT_code/sentry_planning_ws/src/sentry_planning/trajectory_generation/src/../include/plan_manager.h:26,
+                 from /home/sentry/AstarTraining/RM_Sentry_2026/HIT_code/sentry_planning_ws/src/sentry_planning/trajectory_generation/src/../include/replan_fsm.h:29,
+                 from /home/sentry/AstarTraining/RM_Sentry_2026/HIT_code/sentry_planning_ws/src/sentry_planning/trajectory_generation/src/replan_fsm.cpp:27:
+/home/sentry/AstarTraining/RM_Sentry_2026/HIT_code/sentry_planning_ws/src/sentry_planning/trajectory_generation/include/root_solver/minco_trajectory.hpp: In member function ‘void MincoTrajectory::getGradTimes(Eigen::VectorXd&) const’:
+/home/sentry/AstarTraining/RM_Sentry_2026/HIT_code/sentry_planning_ws/src/sentry_planning/trajectory_generation/include/root_solver/minco_trajectory.hpp:258:26: warning: unused variable ‘Ti4’ [-Wunused-variable]
+  258 |             const double Ti4 = Ti3 * Ti;
+      |                          ^~~
+/home/sentry/AstarTraining/RM_Sentry_2026/HIT_code/sentry_planning_ws/src/sentry_planning/trajectory_generation/src/replan_fsm.cpp: In member function ‘void ReplanFSM::rcvGazeboRealPosCallback(const ModelStatesConstPtr&)’:
+/home/sentry/AstarTraining/RM_Sentry_2026/HIT_code/sentry_planning_ws/src/sentry_planning/trajectory_generation/src/replan_fsm.cpp:108:21: warning: comparison of integer expressions of different signedness: ‘int’ and ‘std::vector<std::__cxx11::basic_string<char> >::size_type’ {aka ‘long unsigned int’} [-Wsign-compare]
+  108 |     for(int i = 0;i < state->name.size();i++){
+      |                   ~~^~~~~~~~~~~~~~~~~~~~
+/home/sentry/AstarTraining/RM_Sentry_2026/HIT_code/sentry_planning_ws/src/sentry_planning/trajectory_generation/src/replan_fsm.cpp: In member function ‘void ReplanFSM::rcvLidarIMUPosCallback(const OdometryConstPtr&)’:
+/home/sentry/AstarTraining/RM_Sentry_2026/HIT_code/sentry_planning_ws/src/sentry_planning/trajectory_generation/src/replan_fsm.cpp:169:12: warning: unused variable ‘siny_cosp’ [-Wunused-variable]
+  169 |     double siny_cosp = +2.0 * (w * z + x * y);
+      |            ^~~~~~~~~
+/home/sentry/AstarTraining/RM_Sentry_2026/HIT_code/sentry_planning_ws/src/sentry_planning/trajectory_generation/src/replan_fsm.cpp:170:12: warning: unused variable ‘cosy_cosp’ [-Wunused-variable]
+  170 |     double cosy_cosp = +1.0 - 2.0 * (y * y + z * z);
+      |            ^~~~~~~~~
+/home/sentry/AstarTraining/RM_Sentry_2026/HIT_code/sentry_planning_ws/src/sentry_planning/trajectory_generation/src/replan_fsm.cpp: In member function ‘void ReplanFSM::execFSMCallback(const ros::TimerEvent&)’:
+/home/sentry/AstarTraining/RM_Sentry_2026/HIT_code/sentry_planning_ws/src/sentry_planning/trajectory_generation/src/replan_fsm.cpp:321:30: warning: comparison of integer expressions of different signedness: ‘int’ and ‘std::vector<double>::size_type’ {aka ‘long unsigned int’} [-Wsign-compare]
+  321 |             for(int i = 0; i < plannerManager->reference_path->m_trapezoidal_time.size(); i++){
+      |                            ~~^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+/home/sentry/AstarTraining/RM_Sentry_2026/HIT_code/sentry_planning_ws/src/sentry_planning/trajectory_generation/src/replan_fsm.cpp:357:30: warning: comparison of integer expressions of different signedness: ‘int’ and ‘std::vector<double>::size_type’ {aka ‘long unsigned int’} [-Wsign-compare]
+  357 |             for(int i = 0; i < plannerManager->reference_path->m_trapezoidal_time.size(); i++){
+      |                            ~~^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+/home/sentry/AstarTraining/RM_Sentry_2026/HIT_code/sentry_planning_ws/src/sentry_planning/trajectory_generation/src/Astar_searcher.cpp: In member function ‘void AstarPathFinder::getCurPositionIndex(std::vector<Eigen::Matrix<double, 3, 1> >, Eigen::Vector3d, int&)’:
+/home/sentry/AstarTraining/RM_Sentry_2026/HIT_code/sentry_planning_ws/src/sentry_planning/trajectory_generation/src/Astar_searcher.cpp:31:23: warning: comparison of integer expressions of different signedness: ‘int’ and ‘std::vector<Eigen::Matrix<double, 3, 1> >::size_type’ {aka ‘long unsigned int’} [-Wsign-compare]
+   31 |     for (int i = 0; i < optimized_path.size() - 1; i++) {
+      |                     ~~^~~~~~~~~~~~~~~~~~~~~~~~~~~
+/home/sentry/AstarTraining/RM_Sentry_2026/HIT_code/sentry_planning_ws/src/sentry_planning/trajectory_generation/src/Astar_searcher.cpp: In member function ‘bool AstarPathFinder::checkPathCollision(std::vector<Eigen::Matrix<double, 3, 1> >, Eigen::Vector3d&, Eigen::Vector3d, Eigen::Vector3d&, Eigen::Vector3d&, int&, int&)’:
+/home/sentry/AstarTraining/RM_Sentry_2026/HIT_code/sentry_planning_ws/src/sentry_planning/trajectory_generation/src/Astar_searcher.cpp:64:34: warning: comparison of integer expressions of different signedness: ‘int’ and ‘std::vector<Eigen::Matrix<double, 3, 1> >::size_type’ {aka ‘long unsigned int’} [-Wsign-compare]
+   64 |     for(int i = cur_start_id ; i < optimized_path.size() - 1; i++){
+      |                                ~~^~~~~~~~~~~~~~~~~~~~~~~~~~~
+/home/sentry/AstarTraining/RM_Sentry_2026/HIT_code/sentry_planning_ws/src/sentry_planning/trajectory_generation/src/Astar_searcher.cpp:87:24: warning: comparison of integer expressions of different signedness: ‘int’ and ‘std::vector<Eigen::Matrix<double, 3, 1> >::size_type’ {aka ‘long unsigned int’} [-Wsign-compare]
+   87 |                 while(i<optimized_path.size() - 1){
+      |                       ~^~~~~~~~~~~~~~~~~~~~~~~~~~
+/home/sentry/AstarTraining/RM_Sentry_2026/HIT_code/sentry_planning_ws/src/sentry_planning/trajectory_generation/src/Astar_searcher.cpp:59:9: warning: unused variable ‘path_start_count’ [-Wunused-variable]
+   59 |     int path_start_count = cur_start_id;
+      |         ^~~~~~~~~~~~~~~~
+/home/sentry/AstarTraining/RM_Sentry_2026/HIT_code/sentry_planning_ws/src/sentry_planning/trajectory_generation/src/Astar_searcher.cpp:60:9: warning: unused variable ‘path_end_count’ [-Wunused-variable]
+   60 |     int path_end_count = cur_start_id + 1;
+      |         ^~~~~~~~~~~~~~
+/home/sentry/AstarTraining/RM_Sentry_2026/HIT_code/sentry_planning_ws/src/sentry_planning/trajectory_generation/src/Astar_searcher.cpp: In member function ‘std::vector<Eigen::Matrix<double, 3, 1> > AstarPathFinder::smoothTopoPath(std::vector<Eigen::Matrix<double, 3, 1> >)’:
+/home/sentry/AstarTraining/RM_Sentry_2026/HIT_code/sentry_planning_ws/src/sentry_planning/trajectory_generation/src/Astar_searcher.cpp:133:33: warning: comparison of integer expressions of different signedness: ‘int’ and ‘std::vector<Eigen::Matrix<double, 3, 1> >::size_type’ {aka ‘long unsigned int’} [-Wsign-compare]
+  133 |         for(int i = iter_idx; i <topo_path.size() - 1; i++)  // 找topo路径的每一段
+      |                               ~~^~~~~~~~~~~~~~~~~~~~~
+/home/sentry/AstarTraining/RM_Sentry_2026/HIT_code/sentry_planning_ws/src/sentry_planning/trajectory_generation/src/Astar_searcher.cpp:167:30: warning: unused variable ‘easy’ [-Wunused-variable]
+  167 |                         bool easy = getNearPoint(temp, head_pos, temp);
+      |                              ^~~~
+/home/sentry/AstarTraining/RM_Sentry_2026/HIT_code/sentry_planning_ws/src/sentry_planning/trajectory_generation/src/Astar_searcher.cpp:177:37: warning: variable ‘temp_id’ set but not used [-Wunused-but-set-variable]
+  177 |                     Eigen::Vector3i temp_id = global_map->coord2gridIndex(tail_pos);
+      |                                     ^~~~~~~
+/home/sentry/AstarTraining/RM_Sentry_2026/HIT_code/sentry_planning_ws/src/sentry_planning/trajectory_generation/src/Astar_searcher.cpp:182:26: warning: unused variable ‘easy’ [-Wunused-variable]
+  182 |                     bool easy = getNearPoint(temp, head_pos, temp);
+      |                          ^~~~
+/home/sentry/AstarTraining/RM_Sentry_2026/HIT_code/sentry_planning_ws/src/sentry_planning/trajectory_generation/src/Astar_searcher.cpp: In member function ‘bool AstarPathFinder::lineVisib(const Vector3d&, const Vector3d&, Eigen::Vector3d&, double, int)’:
+/home/sentry/AstarTraining/RM_Sentry_2026/HIT_code/sentry_planning_ws/src/sentry_planning/trajectory_generation/src/Astar_searcher.cpp:233:12: warning: unused variable ‘distance_thresh’ [-Wunused-variable]
+  233 |     double distance_thresh;
+      |            ^~~~~~~~~~~~~~~
+/home/sentry/AstarTraining/RM_Sentry_2026/HIT_code/sentry_planning_ws/src/sentry_planning/trajectory_generation/src/Astar_searcher.cpp:244:12: warning: unused variable ‘z_offset’ [-Wunused-variable]
+  244 |     double z_offset = p1.z() - p2.z();
+      |            ^~~~~~~~
+/home/sentry/AstarTraining/RM_Sentry_2026/HIT_code/sentry_planning_ws/src/sentry_planning/trajectory_generation/src/Astar_searcher.cpp: In member function ‘bool AstarPathFinder::getNearPoint(Eigen::Vector3d, Eigen::Vector3d, Eigen::Vector3d&)’:
+/home/sentry/AstarTraining/RM_Sentry_2026/HIT_code/sentry_planning_ws/src/sentry_planning/trajectory_generation/src/Astar_searcher.cpp:349:18: warning: variable ‘tempID_left’ set but not used [-Wunused-but-set-variable]
+  349 |         Vector3i tempID_left = global_map->coord2gridIndex(headPos_left);
+      |                  ^~~~~~~~~~~
+/home/sentry/AstarTraining/RM_Sentry_2026/HIT_code/sentry_planning_ws/src/sentry_planning/trajectory_generation/src/Astar_searcher.cpp:350:18: warning: variable ‘tempID_right’ set but not used [-Wunused-but-set-variable]
+  350 |         Vector3i tempID_right = global_map->coord2gridIndex(headPos_right);
+      |                  ^~~~~~~~~~~~
+/home/sentry/AstarTraining/RM_Sentry_2026/HIT_code/sentry_planning_ws/src/sentry_planning/trajectory_generation/src/Astar_searcher.cpp:352:13: warning: unused variable ‘check_swell’ [-Wunused-variable]
+  352 |         int check_swell = (check_distance / 0.1) -1;
+      |             ^~~~~~~~~~~
+/home/sentry/AstarTraining/RM_Sentry_2026/HIT_code/sentry_planning_ws/src/sentry_planning/trajectory_generation/src/visualization_utils.cpp: In member function ‘void Vislization::visTopoPath(std::vector<std::vector<Eigen::Matrix<double, 3, 1> > >)’:
+/home/sentry/AstarTraining/RM_Sentry_2026/HIT_code/sentry_planning_ws/src/sentry_planning/trajectory_generation/src/visualization_utils.cpp:352:22: warning: comparison of integer expressions of different signedness: ‘int’ and ‘std::vector<std::vector<Eigen::Matrix<double, 3, 1> > >::size_type’ {aka ‘long unsigned int’} [-Wsign-compare]
+  352 |     for(int i = 0; i < path.size(); i++) {
+      |                    ~~^~~~~~~~~~~~~
+/home/sentry/AstarTraining/RM_Sentry_2026/HIT_code/sentry_planning_ws/src/sentry_planning/trajectory_generation/src/visualization_utils.cpp:353:27: warning: comparison of integer expressions of different signedness: ‘int’ and ‘std::vector<Eigen::Matrix<double, 3, 1> >::size_type’ {aka ‘long unsigned int’} [-Wsign-compare]
+  353 |         for (int j = 0; j < path[i].size() - 1; j++) {
+      |                         ~~^~~~~~~~~~~~~~~~~~~~
+/home/sentry/AstarTraining/RM_Sentry_2026/HIT_code/sentry_planning_ws/src/sentry_planning/trajectory_generation/src/visualization_utils.cpp: In member function ‘void Vislization::visTopoPointGuard(std::vector<std::shared_ptr<GraphNode> >)’:
+/home/sentry/AstarTraining/RM_Sentry_2026/HIT_code/sentry_planning_ws/src/sentry_planning/trajectory_generation/src/visualization_utils.cpp:431:26: warning: comparison of integer expressions of different signedness: ‘int’ and ‘std::vector<std::shared_ptr<GraphNode> >::size_type’ {aka ‘long unsigned int’} [-Wsign-compare]
+  431 |         for(int j = 0; j < (*iter)->neighbors.size();j++){
+      |                        ~~^~~~~~~~~~~~~~~~~~~~~~~~~~~
+/home/sentry/AstarTraining/RM_Sentry_2026/HIT_code/sentry_planning_ws/src/sentry_planning/trajectory_generation/src/visualization_utils.cpp:440:26: warning: comparison of integer expressions of different signedness: ‘int’ and ‘std::vector<std::shared_ptr<GraphNode> >::size_type’ {aka ‘long unsigned int’} [-Wsign-compare]
+  440 |         for(int j = 0; j < (*iter)->neighbors_but_noconnected.size();j++){
+      |                        ~~^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+/home/sentry/AstarTraining/RM_Sentry_2026/HIT_code/sentry_planning_ws/src/sentry_planning/trajectory_generation/src/visualization_utils.cpp: In member function ‘void Vislization::visTopoPointConnection(std::vector<std::shared_ptr<GraphNode> >)’:
+/home/sentry/AstarTraining/RM_Sentry_2026/HIT_code/sentry_planning_ws/src/sentry_planning/trajectory_generation/src/visualization_utils.cpp:526:26: warning: comparison of integer expressions of different signedness: ‘int’ and ‘std::vector<std::shared_ptr<GraphNode> >::size_type’ {aka ‘long unsigned int’} [-Wsign-compare]
+  526 |         for(int j = 0; j < (*iter)->neighbors.size();j++){
+      |                        ~~^~~~~~~~~~~~~~~~~~~~~~~~~~~
+/home/sentry/AstarTraining/RM_Sentry_2026/HIT_code/sentry_planning_ws/src/sentry_planning/trajectory_generation/src/visualization_utils.cpp:538:26: warning: comparison of integer expressions of different signedness: ‘int’ and ‘std::vector<std::shared_ptr<GraphNode> >::size_type’ {aka ‘long unsigned int’} [-Wsign-compare]
+  538 |         for(int j = 0; j < (*iter)->neighbors.size();j++){
+      |                        ~~^~~~~~~~~~~~~~~~~~~~~~~~~~~

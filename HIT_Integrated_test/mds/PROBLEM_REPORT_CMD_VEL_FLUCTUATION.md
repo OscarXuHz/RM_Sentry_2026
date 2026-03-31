@@ -1,4 +1,8 @@
+> **⚠️ HISTORICAL** — Root cause was the old dual-LiDAR single-filter bug, which cannot occur on the current single MID-360 hardware.
+
 # Problem Report: cmd_vel Fluctuation and Excessive Global Replanning
+
+> **See also:** [OBSTACLE_AVOIDANCE_FIX_REPORT.md](OBSTACLE_AVOIDANCE_FIX_REPORT.md) for the planner parameter fixes that resolved this.
 
 ## Problem Statement
 The `/cmd_vel` topic oscillates violently between positive and negative values,

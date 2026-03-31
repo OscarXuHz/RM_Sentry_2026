@@ -176,17 +176,28 @@ int main(int argc, char **argv)
         pcl_cloud.points.clear();
         tf2::Transform tf_transform;
         tf2::fromMsg(transformStamped.transform, tf_transform);
+        double angle_rad = -20 * M_PI / 180.0;
+        double cos_a = cos(angle_rad);
+        double sin_a = sin(angle_rad);
         for (int i = 0; i < scan_record.points.size(); i++)
         {
-            double x = scan_record.points[i].x - 0.011;
-            double y = -scan_record.points[i].y - 0.02329;
-            double z = -scan_record.points[i].z + 0.04412;
+            double x = scan_record.points[i].x ;
+            double y = scan_record.points[i].y;
+            double z = scan_record.points[i].z;
+
+            // double x = scan_record.points[i].x + 0.02843;
+            // double y_temp = scan_record.points[i].y - 0.14337;
+            // double z_temp = scan_record.points[i].z;
+
+            // // 绕X轴旋转
+            // double y = y_temp * cos_a - z_temp * sin_a;
+            // double z = y_temp * sin_a + z_temp * cos_a;
             tf2::Vector3 point_in(x, y, z);
             tf2::Vector3 point_out = tf_transform * point_in;
             double nx = point_out.x();
             double ny = point_out.y();
             double nz = point_out.z();
-            if (satisfied(nx,ny,-z))
+            if (satisfied(nx,ny,nz))
             {
                 pcl_cloud.points.push_back(pcl::PointXYZ(nx, ny, nz));
             }

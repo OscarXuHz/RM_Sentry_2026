@@ -35,7 +35,7 @@
     <arg name="pca_max_iterations" default="5" doc="Max PCA floor-leveling passes (default 5; converges early if tilt &lt; 0.005 deg)" />
     <arg name="lidar_height" default="0.3" doc="LiDAR mounting height above floor (m). Shifts z=0 to the floor plane." />
     <arg name="z_floor"   default="-0.5" doc="Discard points with Z below this height (metres) when saving PCD" />
-    <arg name="z_ceiling" default="0.4"  doc="Discard points with Z above this height (metres) when saving PCD" />
+    <arg name="z_ceiling" default="3.0"  doc="Discard points with Z above this height (metres) when saving PCD" />
 
     <!-- 1) Livox driver -->
     <include file="$(find livox_ros_driver2)/launch_ROS1/msg_mixed.launch" />

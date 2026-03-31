@@ -14,6 +14,7 @@
 
 double first_RADIUS;
 double second_RADIUS, max_height, start_height;
+double min_height;
 
 double slope_1,slp_first_RADIUS, height_1;
 double slope_2, slp_second_RADIUS, height_2;
@@ -45,6 +46,10 @@ double max_dis=0;
 std::vector<double> distances;
 
 bool filter(double x, double y, double z){
+    // // Height filter
+    // if (z > max_height || z < min_height)
+    //     return false;
+    // Radius filter
     double dx = x + 0.13388;
     double dy = y + 0.11369;
     return dx*dx + dy*dy >= 0.35 * 0.35;
@@ -75,6 +80,16 @@ int main(int argc, char **argv)
         ROS_ERROR("Failed to retrieve parameter 'new_scan_topic'");
         return -1;
     }
+    if (!nh.getParam("/" + node_name + "/max_height", max_height))
+    {
+        ROS_ERROR("Failed to retrieve parameter 'max_height'");
+        return -1;
+    }
+    if (!nh.getParam("/" + node_name + "/min_height", min_height))
+    {
+        ROS_ERROR("Failed to retrieve parameter 'min_height'");
+        return -1;
+    }
 
     ros::Subscriber sub_left = nh.subscribe(scan_topic_left, 1, scanCallback_left);
     ros::Subscriber sub_right = nh.subscribe(scan_topic_right, 1, scanCallback_right);
@@ -92,18 +107,37 @@ int main(int argc, char **argv)
         auto scan_record_left = scan_copy_left;
         auto scan_record_right = scan_copy_right;
         pcl_cloud.points.clear();
+        double angle_rad = -20 * M_PI / 180.0;
+        double cos_a = cos(angle_rad);
+        double sin_a = sin(angle_rad);
         for (int i = 0; i < scan_record_left.points.size(); i++){
             if(!filter(scan_record_left.points[i].x, scan_record_left.points[i].y, scan_record_left.points[i].z))continue;
-            double x = scan_record_left.points[i].x - 0.011;
-            double y = -scan_record_left.points[i].y + 0.02329;
-            double z = -scan_record_left.points[i].z - 0.04412;
+            double x = scan_record_left.points[i].x+0.02843 ;
+            double y = scan_record_left.points[i].y - 0.14337 ;
+            double z = scan_record_left.points[i].z +0.35;
+
+            // double x = scan_record_left.points[i].x + 0.02843;
+            // double y_temp = scan_record_left.points[i].y + 0.14337;
+            // double z_temp = scan_record_left.points[i].z;
+
+            // // 绕X轴旋转
+            // double y = y_temp * cos_a - z_temp * (-sin_a);
+            // double z = y_temp * (-sin_a) + z_temp * cos_a;
+            
             pcl_cloud.points.push_back(pcl::PointXYZ(x, y, z));
         }
         for (int i = 0; i < scan_record_right.points.size(); i++){
             if(!filter(scan_record_right.points[i].x, scan_record_right.points[i].y, scan_record_right.points[i].z))continue;
-            double x = scan_record_right.points[i].x - 0.011;
-            double y = -scan_record_right.points[i].y + 0.02329;
-            double z = -scan_record_right.points[i].z - 0.04412;
+            double x = scan_record_right.points[i].x ;
+            double y = scan_record_right.points[i].y ;
+            double z = scan_record_right.points[i].z;
+            // double x = scan_record_right.points[i].x + 0.02843;
+            // double y_temp = scan_record_right.points[i].y - 0.14337;
+            // double z_temp = scan_record_right.points[i].z;
+
+            // // 绕X轴旋转
+            // double y = y_temp * cos_a - z_temp * sin_a;
+            // double z = y_temp * sin_a + z_temp * cos_a;
             pcl_cloud.points.push_back(pcl::PointXYZ(x, y, z));
         }
         // for(int i=(int)distances.size()-1;i>=0;i--)printf("%lf ",distances[i]);

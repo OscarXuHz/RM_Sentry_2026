@@ -1990,3 +1990,350 @@ obstacle search in bridge areas, making the MPC completely blind there.
 | "MPC is not safe" rate | ~8.5% | **0%** |
 | Robot movement | stuck (serial closed) | **moving** (slight drift) |
 | Replans | 1/14s + periodic | periodic only (5s timer) |
+
+---
+
+## Fix 53 — smoothTopoPath Root-Cause Overhaul (5 parts)
+
+**Date:** 2026-03-23  
+**Symptom:** The trajectory was ALWAYS a perfect straight line from start to goal, going
+straight through walls. `/optimized_path_vis` data showed perfectly collinear points.
+All downstream consumers (MINCO, reference_path, MPC) could not fix it.
+
+**Root-cause analysis:** Three independent bugs in the global planning pipeline:
+
+1. **TopoSearch used live obstacles for PRM graph construction.** `lineVisib()` in
+   TopoSearch.cpp called `isOccupied()` which checks both static map (`data[]`) AND
+   live lidar obstacles (`l_data[]`). When the lidar detected ANY nearby obstacle,
+   the PRM graph became completely disconnected — ALL pathfinding failed with
+   "End node is unreachable". The FSM fell through to straight-line fallback.
+
+2. **`getNearPoint()` division by zero.** When the collision point was very close to
+   `head_pos`, `sqrt(delta_x² + delta_y²) ≈ 0` → division by zero → NaN coordinates.
+   NaN propagated through MINCO → reference_path → garbage trajectory.
+
+3. **`smoothTopoPath()` infinite loop.** When collision occurred very close to `head_pos`,
+   `getNearPoint()` returned the same point each iteration. The algorithm looped 500
+   times producing 500 identical waypoints, then the fallback returned this garbage.
+
+### Fix 53a — TopoSearch Static-Only Occupancy
+
+**File:** `trajectory_generation/src/TopoSearch.cpp`  
+**Change:** Replaced 5 `isOccupied()` calls with `isStaticOccupied()`:
+- `lineVisib()` (line ~960) — **CRITICAL**: PRM edge visibility check
+- `createLocalGraph()` sample validation (line ~94)
+- `createLocalGraph()` obstacle count (line ~123)
+- `createGraph()` obstacle count (line ~324)
+- `getSample()` (line ~708)
+
+**Rationale:** The topo PRM graph represents the static topology of the map. Live
+obstacles are transient (1s decay) and handled downstream by `checkPathCollision()`
+and the MINCO smoother's obstacle cost. Using live obstacles for PRM construction
+caused catastrophic graph disconnection whenever the lidar detected anything nearby.
+
+### Fix 53b — getNearPoint NaN Guard
+
+**File:** `trajectory_generation/src/Astar_searcher.cpp` → `getNearPoint()`  
+**Change:** Added `norm < 1e-6` guard before division. If triggered, returns
+`best_point = headPos` and `false`. Also added NaN fallback after both `getNearPoint()`
+calls in `smoothTopoPath()` — if result contains NaN, substitute the nearest topo node.
+
+```cpp
+double norm = std::sqrt(delta_x * delta_x + delta_y * delta_y);
+if (norm < 1e-6) {
+    best_point = headPos;
+    return false;
+}
+```
+
+### Fix 53c — Pipeline Visualization
+
+**Files:** `visualization_utils.h`, `visualization_utils.cpp`, `replan_fsm.cpp`, `plan_manager.h`, `plan_manager.cpp`  
+**Change:** Added 3 new rviz visualization publishers for debugging the planning pipeline:
+- `minco_input_vis` (orange SPHERE_LIST) — sample points fed to MINCO optimizer
+- `minco_output_vis` (green LINE_STRIP) — MINCO optimized output path
+- `reference_line_vis` (magenta LINE_STRIP) — final reference trajectory
+
+### Fix 53d — smoothTopoPath Stuck Detection
+
+**File:** `trajectory_generation/src/Astar_searcher.cpp` → `smoothTopoPath()`  
+**Change:** Track `prev_head_pos` across iterations. If `head_shift < 0.05m` for
+consecutive iterations, the algorithm is stuck at a wall corner. When stuck, skip
+forward to the next topo waypoint (endpoint of current segment) instead of looping.
+
+### Fix 53e — Dedup + Deterministic PRM Samples
+
+**Files:** `Astar_searcher.cpp`, `TopoSearch.cpp`  
+**Changes:**
+1. **Dedup pass** in `smoothTopoPath()`: Before returning, remove consecutive
+   near-duplicate points (<0.1m apart) while always preserving start and end.
+   Eliminates the repeated points caused by stuck-skip and getNearPoint fallbacks.
+
+2. **Deterministic PRM samples** in `createGraph()`: Before the random sampling loop,
+   add 48 deterministic samples around start and end nodes (8 angles × 3 radii at
+   1.0m, 2.0m, 3.0m). Ensures graph connectivity without relying solely on random
+   sampling, reducing "End node unreachable" failures from 632 to 30 (only during
+   the brief 2s localization convergence window).
+
+### Results
+
+| Metric | Before Fix 53 | After Fix 53 |
+|--------|---------------|-------------|
+| Path shape | Perfect straight line through walls | Multi-point path around walls |
+| smoothTopoPath output | 500 identical points or NaN | 3-5 clean waypoints |
+| "End node unreachable" | Every planning cycle (100%) | Only during 2s localization init |
+| MINCO cost | ~1000+ (fighting wall penetration) | 14-247 (clean optimization) |
+| MINCO segments | 10-19 (straight line) | 13-27 (proper curve) |
+| max_turn | <35° (straight) | 25-43° (turns around walls) |
+| Path avoids walls | **NO** | **YES** |
+
+---
+
+## Fix 54 — Remove DISPENSE Mode + Fix cmd_vel=0
+
+**Date:** 2026-03-23  
+**Symptom:** (1) `cmd_vel` occasionally drops to zero mid-navigation. (2) When planning
+around live obstacles, loops and knots appear in the path. User suspects DISPENSE mode
+contributes to cmd_vel=0.
+
+### Fix 54a — Remove DISPENSE Mode
+
+**File:** `trajectory_tracking/src/tracking_manager.cpp`, `trajectory_tracking/include/tracking_manager.h`
+
+**Rationale:** DISPENSE mode was a recovery behavior that reversed MPC velocity when the
+robot appeared stuck. However, it caused more problems than it solved:
+- Velocity reversal amplified MPC oscillation → stuck detection fired again → infinite loop
+- The negative velocity exemption (`planningMode != DISPENSE`) in the v_ctrl clamp created
+  a special code path that could produce unexpected zero/negative velocities
+- With Fix 53 properly fixing the planning pipeline, stuck situations due to bad paths
+  should no longer occur. Genuine physical stuck situations are better handled by replan.
+
+**Changes:**
+- Remove `planningType` enum and `planningMode` variable
+- Remove `checkMotionNormal()` function entirely
+- Remove DISPENSE velocity reversal blocks in both LiDAR and Gazebo callbacks
+- Remove DISPENSE check in `checkMotionMode()`
+- Simplify negative-v clamping (always clamp, no DISPENSE exception)
+- Replace `replan_now` DISPENSE trigger with direct replan-on-stuck after 3s
+
+### Fix 54b — Fix cmd_vel=0 Issue
+
+**File:** `trajectory_tracking/src/tracking_manager.cpp`
+
+**Root cause:** When `reference_path.size() <= 2`, the MPC is never called, but the code
+still falls through to publish `predict_input` (initialized to zeros). This sends
+`cmd_vel = {0,0,0}` to the MCU, causing the robot to stop mid-navigation.
+
+**Fix:** When `reference_path.size() <= 2` and not at goal, request immediate replan
+instead of publishing zero velocity. This bridges the gap between old trajectory expiring
+and new one arriving.
+
+**Changes (implemented):**
+- Added `else if (!arrival_goal)` branch after the `reference_path.size() > 2` check
+  in BOTH LiDAR and Gazebo callbacks
+- When triggered: sets `replan_now = true`, calls `checkReplanFlag()`, returns early
+- Robot skips publishing zero cmd_vel, instead requesting a fresh trajectory
+- Added diagnostic logging: `[Fix54b] reference_path.size()=%zu <= 2, requesting replan`
+- Added negative-velocity diagnostic: `[Fix54b] v_ctrl=%.4f NEGATIVE` (every 10th occurrence)
+
+### Fix 54c — smoothTopoPath / lineVisib Use Static Occupancy  
+
+**File:** `trajectory_generation/src/Astar_searcher.cpp`
+
+**Root cause:** `smoothTopoPath` and `lineVisib` used `isOccupied()` (includes live LiDAR
+obstacles), while `TopoSearch` (since Fix 53a) uses `isStaticOccupied()`. This
+inconsistency meant the path smoother could see live obstacles the topo search didn't,
+causing detours that loop back on themselves — the "loop/knot" artifact near live obstacles.
+
+**Fix:** Changed all occupancy checks in `smoothTopoPath`, `lineVisib` (including safety
+margin checks), and `checkPointCollision` to use `isStaticOccupied()`, matching the topo
+search. Live obstacle avoidance is delegated to the MPC / local planner.
+
+**Changes:**
+- Line ~176 (`smoothTopoPath`): `isOccupied(temp_id.x(), temp_id.y(), temp_id.z(), second_height)` →
+  `isStaticOccupied(temp_id.x(), temp_id.y(), second_height)`
+- Line ~340 (`lineVisib`): `isOccupied(pt_idx, pt_idy, pt_idz, second_height)` →
+  `isStaticOccupied(pt_idx, pt_idy, second_height)`
+- Lines ~353-359 (`lineVisib` margin): all 4 `isOccupied` calls → `isStaticOccupied`
+- Line ~443 (`checkPointCollision`): `isOccupied(path_succ, false)` →
+  `isStaticOccupied(path_succ, false)`
+- Kept `isOccupied` in `getLocalTarget` collision detection (line ~81) — live obstacles
+  correctly trigger replans for the executed path
+- Kept `isOccupied` in `visGridMap` (line ~506) — visualization shows live obstacles
+
+**Verification:** After fix, `smoothTopoPath` converges in 2 iterations (was 500 limit),
+producing 3-point clean paths with no loops. `iter_count=2` confirmed in logs.
+
+---
+
+## Fix 55 / 55b: checkfeasible Static Wall Neighborhood + obs_points Type Classification
+
+**Date:** 2026-03-23
+
+**Files modified:**
+- `trajectory_tracking/src/local_planner.cpp` → `checkfeasible()`, `linearation()` searchWindow
+
+**Root cause (Fix 55):** The exact-cell static map check in `checkfeasible()` missed static
+walls when lidar grid quantization placed the detection 1-2 cells from the actual static map
+entry. This caused perpetual "MPC is not safe" → replan every ~5s.
+
+**Fix 55:** Expanded static-map skip from exact cell to ±2 neighborhood.
+**Fix 55b:** Increased to ±8 (STATIC_CHECK_RADIUS=8, 0.4m tolerance).
+
+**Root cause (55b obs type):** In `linearation()`, ANY cell with `l_data > 0` was classified
+as type=1 (dynamic, 0.4m clearance). Static walls seen by lidar also have `l_data > 0`.
+In corridors, BOTH walls got type=1 → MPC needed 0.4m clearance from each → not enough
+space → barrier overwhelmed tracking cost → negative v_ctrl → robot stuck.
+
+**Fix 55b obs type:** Added ±4 cell neighborhood check (`STATIC_NBR=4`). If a lidar-occupied
+cell is near a static map entry (±4 cells = ±0.2m), classify as type=0 (static, 0.2m clearance).
+Only genuinely dynamic obstacles (no nearby static entry) get type=1.
+
+**Result:** "MPC is not safe" dropped from 11/sec to 1.5/sec.
+
+---
+
+## Fix 56: OMNIDIRECTIONAL v_ctrl — Flip Instead of Clamp to Zero
+
+**Date:** 2026-03-26
+
+**File:** `trajectory_tracking/src/tracking_manager.cpp` → `rcvLidarIMUPosCallback()`
+
+**Root cause:** Fix 45c clamped `v_ctrl >= 0` (to prevent backward motion), but the robot
+is OMNIDIRECTIONAL. When the MPC unicycle model output negative v (meaning "move opposite
+to phi"), clamping to 0 killed all velocity. This was the **#1 cause of cmd_vel going to
+zero** (56% of frames observed, last 60 samples ALL zeros).
+
+**Fix:** Instead of clamping `v_ctrl` to 0, flip the direction:
+```cpp
+if (v_ctrl < 0.0) {
+    v_ctrl = -v_ctrl;
+    phi_ctrl += M_PI;
+}
+```
+This preserves the MPC's intended world-frame velocity vector: `v*cos(phi) == (-v)*cos(phi+π)`.
+The gimbal-frame conversion then correctly produces the robot's desired body-frame velocities.
+
+**Also added:** Explicit speed cap `MAX_SPEED = 2.0 m/s` on v_ctrl output.
+
+**Result:** cmd_vel non-zero rate improved from **44% to 100%**. Zero "MPC is not safe"
+warnings. Robot moves continuously instead of stopping every few seconds.
+
+---
+
+## Fix 57: Disable speed_direction Reverse Mode
+
+**Date:** 2026-03-26
+
+**File:** `trajectory_tracking/src/local_planner.cpp` → `getFightTrackingTraj()`
+
+**Root cause:** The `speed_direction` system (Fix 34b hysteresis) switched between forward
+(+1) and reverse (-1) mode. When speed_direction=-1, `ref_speed` became negative. The MPC
+tried to match negative reference speed, producing negative v_ctrl, which (before Fix 56)
+was clamped to zero. For an omnidirectional robot, "reverse" is meaningless — the robot can
+move in any direction at any heading.
+
+**Fix:** Set `speed_direction = 1` always. Removed the enter/exit reverse hysteresis logic.
+Simplified ref_speed to always be positive (magnitude of velocity vector).
+
+---
+
+## Fix 58: Obstacle Braking + Curvature Speed Reduction
+
+**Date:** 2026-03-26
+
+**File:** `trajectory_tracking/src/local_planner.cpp` → `getFightTrackingTraj()`
+
+**Fix 58a:** Reduced `OBS_MIN_SCALE` from 0.25 to 0.15. Now safe because Fix 56 prevents
+the v_ctrl→0 cascade that previously required gentler braking.
+
+**Fix 58b:** Added curvature-based speed reduction. When `ref_phi` changes rapidly between
+MPC steps (>0.5 rad/step), reduce ref_speed proportionally. This prevents overshooting
+sharp turns.
+
+---
+
+## Fix 59: Guard/Connector Point Bounds + Occupancy Check
+
+**Date:** 2026-03-26
+
+**File:** `trajectory_generation/src/TopoSearch.cpp` → `createGraph()`, `getSample()`
+
+**Root cause:** `getSample()` could return points outside map bounds (random local fallback)
+or inside static walls (`topo_sample_map` entries). `createGraph()` Phase 3 never checked
+these before adding guard/connector nodes → graph nodes inside walls or out of bounds.
+
+**Fix:**
+- `getSample()` fallback: retry up to 10 times with bounds + `isStaticOccupied` check
+- `getSample()` topo_sample_map: validate with bounds + occupancy before returning, retry 5x
+- `createGraph()` Phase 3: added bounds + `isStaticOccupied` gate before `findVisibGuard()`
+
+---
+
+## Fix 60: checkfeasible/Replan Sensitivity Reduction
+
+**Date:** 2026-03-26
+
+**Files:**
+- `trajectory_tracking/src/local_planner.cpp` → `checkfeasible()`, `linearation()`
+- `trajectory_tracking/src/tracking_manager.cpp` → `checkReplanFlag()`
+
+**Fix 60a:** `STATIC_CHECK_RADIUS` in `checkfeasible()`: 8 → 12 (±0.6m tolerance for
+localization drift, up from ±0.4m).
+
+**Fix 60b:** `STATIC_NBR` in `searchWindow()` obs type classification: 4 → 6 (±0.3m, up
+from ±0.2m for better static wall identification).
+
+**Fix 60c:** Collision replan threshold: 25 → 40 frames. Combined with Fix 60a/b reducing
+false positives, this prevents premature replanning.
+
+**Result:** 0 "MPC is not safe" warnings during 20s test. Periodic replans still occur
+every 5s as designed.
+
+---
+
+## Fix 61: MPC Solver Performance — Precomputed Dilated Static Map
+
+**Date:** 2026-03-26
+
+**Problem:** After the robot moves forward for a while, `/reference_path` can't update
+in time (MPC solver too slow), `/predicted_path` falls behind and goes crazy, causing
+the robot to zigzag as it constantly corrects the outdated path.
+
+**Root cause analysis:**
+- `rostopic hz /cmd_vel` measured **5.3 Hz** (target: 10 Hz), avg 190ms per callback
+- Computational profiling of `linearation()` identified the dominant bottleneck:
+  - `searchWindow` outer loop: 45 calls × 1681 cells = 75,645 `isOccupied` checks
+  - **STATIC_NBR inner loop**: For each occupied+local cell not in the exact static map,
+    scans ±6 cells (13×13 = 169 lookups) to check for nearby static walls → **~639,000
+    grid reads per MPC callback** (89% of total computation)
+  - `checkfeasible` inner loop: 625 reads/step × 5 steps = 3,125 reads (minor)
+  - HPIPM QP: ~20k flops (negligible)
+  - `std::cout` spam: 10+ stdout flushes per callback (I/O stall)
+
+**Files modified:**
+- `trajectory_tracking/include/RM_GridMap.h` — added `near_static_data`, `NEAR_STATIC_RADIUS`, `computeNearStaticMap()`
+- `trajectory_tracking/src/RM_GridMap.cpp` — implemented `computeNearStaticMap()` (one-time dilation at map load)
+- `trajectory_tracking/src/local_planner.cpp` — replaced O(169) and O(625) inner loops with single array lookups
+- `trajectory_tracking/src/tracking_manager.cpp` — removed cout spam
+- `trajectory_tracking/cfg/task.info` — SQP iterations 12→8
+
+**Fix 61a:** Precomputed dilated static map `near_static_data[]`. At map load, for each
+of the 23,358 static cells, marks all cells within ±12 (NEAR_STATIC_RADIUS) as
+"near static". O(S × 625) one-time cost at startup, eliminates 639k reads per callback.
+
+**Fix 61b:** Replaced the O(169) STATIC_NBR inner loop in `searchWindow` lambda with a
+single `near_static_data[nx * GLY_SIZE + ny]` lookup for obstacle type classification.
+
+**Fix 61c:** Replaced the O(625) STATIC_CHECK_RADIUS inner loop in `checkfeasible()`
+with a single `near_static_data[idx * GLY_SIZE + idy]` lookup.
+
+**Fix 61d:** Removed `std::cout << state_deque[i].z() << std::endl` loop in
+`tracking_manager.cpp` that flushed stdout 10+ times per callback at 10Hz.
+
+**Fix 61e:** Reduced `sqpIteration` from 12 to 8. With the precomputed obstacle map
+reducing per-iteration cost, 8 iterations provides sufficient convergence.
+
+**Result:** cmd_vel rate: **5.3 Hz → 10.1 Hz** (91% improvement). 0 "MPC is not safe"
+warnings. MPC solves within 100ms target. Reference/predicted path should now track
+the robot in real-time, eliminating the zigzag motion caused by solver lag.

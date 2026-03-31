@@ -9,7 +9,7 @@
 
   <!-- optional arguments -->
   <arg name="use_imu" default="true" />
-  <arg name="invert_imu_acc" default="true" />
+  <arg name="invert_imu_acc" default="false" />
   <arg name="invert_imu_gyro" default="false" />
   <arg name="use_global_localization" default="false" /> 
   <arg name="imu_topic" default="/livox/imu_filtered" />
@@ -24,7 +24,7 @@
 
     <!-- globalmap_server_nodelet -->
     <node pkg="nodelet" type="nodelet" name="globalmap_server_nodelet" args="load hdl_localization/GlobalmapServerNodelet $(arg nodelet_manager)">
-      <param name="globalmap_pcd" value="$(find hdl_graph_slam)/map/Mar16.pcd" />
+      <param name="globalmap_pcd" value="/home/sentry/AstarTraining/RM_Sentry_2026/HIT_Integrated_test/pcd/current.pcd" />
       <param name="convert_utm_to_local" value="true" />
       <param name="downsample_resolution" value="0.1" />
     </node>
@@ -59,8 +59,8 @@
       <!-- if "specify_init_pose" is true, pose estimator will be initialized with the following params -->
       <!-- otherwise, you need to input an initial pose with "2D Pose Estimate" on rviz" -->
       <param name="specify_init_pose" value="true" />
-      <param name="init_pos_x" value="6.798271894454956" />
-      <param name="init_pos_y" value="-1.80238938331604" />
+      <param name="init_pos_x" value="0.0" />
+      <param name="init_pos_y" value="0.0" />
       <param name="init_pos_z" value="0.0" />
       <param name="init_ori_w" value="0.7017" />
       <param name="init_ori_x" value="0.0" />

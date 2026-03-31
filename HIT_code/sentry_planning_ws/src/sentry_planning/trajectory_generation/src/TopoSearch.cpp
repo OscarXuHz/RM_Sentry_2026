@@ -91,7 +91,8 @@ void TopoSearcher::createLocalGraph(Eigen::Vector3d start, Eigen::Vector3d end, 
         pt = getLocalSample();  /// 返回的采样点
         Eigen::Vector3i pt_idx = global_map->coord2gridIndex(pt);
         ++sample_num;
-        if(global_map->isOccupied(pt_idx, false)) {
+        // (Fix 53a) Use static-only occupancy for local graph sample check
+        if(global_map->isStaticOccupied(pt_idx, false)) {
             continue;
         }
 
@@ -120,7 +121,7 @@ void TopoSearcher::createLocalGraph(Eigen::Vector3d start, Eigen::Vector3d end, 
 
                 int pt_idx, pt_idy, pt_idz;
                 global_map->coord2gridIndex(edge_x, edge_y, edge_z, pt_idx, pt_idy, pt_idz);
-                if (global_map->isOccupied(pt_idx, pt_idy, pt_idz, false)){
+                if (global_map->isStaticOccupied(pt_idx, pt_idy, false)){
                     obs_num ++;
                 }
             }
@@ -284,6 +285,35 @@ void TopoSearcher::createGraph(Eigen::Vector3d start, Eigen::Vector3d end)
     Eigen::Vector3d pt;
     ROS_DEBUG("[Topo]: m_graph before num: %d", m_graph.size());
 
+    // (Fix 53e) Add deterministic samples around start and end to guarantee
+    // quick graph connectivity (avoids 60s+ random-sampling delays).
+    for (int ti = 0; ti <= 1; ti++) {
+        Eigen::Vector3d center = (ti == 0) ? start : end;
+        double radii[] = {1.0, 2.0, 3.0};
+        for (double r : radii) {
+            for (int a = 0; a < 8; a++) {
+                double angle = a * M_PI / 4.0;
+                Eigen::Vector3d sp(center.x() + r * cos(angle),
+                                   center.y() + r * sin(angle), 0);
+                Eigen::Vector3i si = global_map->coord2gridIndex(sp);
+                if (si.x() < 0 || si.x() >= global_map->GLX_SIZE ||
+                    si.y() < 0 || si.y() >= global_map->GLY_SIZE)
+                    continue;
+                if (global_map->isStaticOccupied(si.x(), si.y(), false))
+                    continue;
+                sp.z() = global_map->getHeight(si.x(), si.y());
+                double min_d = 0.0;
+                int eu = 0;
+                std::vector<GraphNode::Ptr> vg = findVisibGuard(sp, min_d, eu);
+                if (vg.size() < 1) {
+                    m_graph.push_back(GraphNode::Ptr(new GraphNode(sp, GraphNode::Guard, ++node_id)));
+                } else if (vg.size() == 2) {
+                    checkHeightFeasible(vg[0], vg[1], sp, node_id);
+                }
+            }
+        }
+    }
+
     while(sample_num < max_sample_num)
     {  // 开始迭代
         double min_distance = 0.0;
@@ -293,6 +323,19 @@ void TopoSearcher::createGraph(Eigen::Vector3d start, Eigen::Vector3d end)
         Eigen::Vector3i pt_idx = global_map->coord2gridIndex(pt);
 
         ++sample_num;
+
+        // Fix 59: Bounds + occupancy check before graph insertion.
+        // getSample() can return points outside map bounds (fallback path)
+        // or inside static walls (topo_sample_map path).  Without this check,
+        // guard/connector nodes end up inside walls or outside the map.
+        if (pt_idx.x() < 0 || pt_idx.x() >= global_map->GLX_SIZE ||
+            pt_idx.y() < 0 || pt_idx.y() >= global_map->GLY_SIZE) {
+            continue;
+        }
+        if (global_map->isStaticOccupied(pt_idx.x(), pt_idx.y(), false)) {
+            continue;
+        }
+
         std::vector<GraphNode::Ptr> visib_guards = findVisibGuard(pt, min_distance, exist_unvisiual);   /// 根据采样点找可见的守卫点
 
         if(visib_guards.size() < 1) { // 这个采样点是不可见的，所以直接建立守卫点
@@ -321,7 +364,7 @@ void TopoSearcher::createGraph(Eigen::Vector3d start, Eigen::Vector3d end)
 
                 int pt_idx, pt_idy, pt_idz;
                 global_map->coord2gridIndex(edge_x, edge_y, edge_z, pt_idx, pt_idy, pt_idz);
-                if (global_map->isOccupied(pt_idx, pt_idy, pt_idz, false)){
+                if (global_map->isStaticOccupied(pt_idx, pt_idy, false)){
                     obs_num ++;
                 }
             }
@@ -689,12 +732,24 @@ Eigen::Vector3d TopoSearcher::getSample()
     if(global_map->topo_sample_map.empty()){
         // Fallback: random sample near robot when topo_sample_map is empty
         ROS_WARN_THROTTLE(5.0, "[Topo] topo_sample_map is empty, falling back to random local sampling");
-        int x_i = int(m_rand_pos(m_eng) * 120);
-        int y_i = int(m_rand_pos(m_eng) * 120);
-        pt.x() = global_map->odom_position.x() + (x_i - 60) * 0.1;
-        pt.y() = global_map->odom_position.y() + (y_i - 60) * 0.1;
-        Eigen::Vector3i pt_idx = global_map->coord2gridIndex(pt);
-        pt.z() = global_map->getHeight(pt_idx.x(), pt_idx.y());
+        // Fix 59: Retry up to 10 times to find a non-occupied, in-bounds sample
+        for (int attempt = 0; attempt < 10; attempt++) {
+            int x_i = int(m_rand_pos(m_eng) * 120);
+            int y_i = int(m_rand_pos(m_eng) * 120);
+            pt.x() = global_map->odom_position.x() + (x_i - 60) * 0.1;
+            pt.y() = global_map->odom_position.y() + (y_i - 60) * 0.1;
+            Eigen::Vector3i pt_idx = global_map->coord2gridIndex(pt);
+            if (pt_idx.x() < 0 || pt_idx.x() >= global_map->GLX_SIZE ||
+                pt_idx.y() < 0 || pt_idx.y() >= global_map->GLY_SIZE)
+                continue;
+            if (global_map->isStaticOccupied(pt_idx.x(), pt_idx.y(), false))
+                continue;
+            pt.z() = global_map->getHeight(pt_idx.x(), pt_idx.y());
+            return pt;
+        }
+        // All attempts failed — return robot position as safe fallback
+        pt = global_map->odom_position;
+        pt.z() = 0.0;
         return pt;
     }
     if(m_rand_pos(m_eng) < 0.1){  // 30的概率采样附近的点
@@ -705,13 +760,34 @@ Eigen::Vector3d TopoSearcher::getSample()
             pt.y() = global_map->odom_position.y() + (y_i - 60) * 0.1;
             Eigen::Vector3i pt_idx = global_map->coord2gridIndex(pt);
             pt.z() = global_map->getHeight(pt_idx.x(), pt_idx.y());
-            if(!global_map->isOccupied(pt_idx, false)) {
+            // (Fix 53a) Use static-only for global graph sample validity
+            if(!global_map->isStaticOccupied(pt_idx, false)) {
                 return pt;
             }
         }
     }
     int index = int(m_rand_pos(m_eng) * global_map->topo_sample_map.size());
     pt = global_map->topo_sample_map[index];
+    // Fix 59: Validate topo_sample_map point is in-bounds and not in a wall
+    {
+        Eigen::Vector3i pt_idx = global_map->coord2gridIndex(pt);
+        if (pt_idx.x() >= 0 && pt_idx.x() < global_map->GLX_SIZE &&
+            pt_idx.y() >= 0 && pt_idx.y() < global_map->GLY_SIZE &&
+            !global_map->isStaticOccupied(pt_idx.x(), pt_idx.y(), false)) {
+            return pt;
+        }
+        // Sample is in a wall or out of bounds — try another random sample
+        for (int attempt = 0; attempt < 5; attempt++) {
+            int idx2 = int(m_rand_pos(m_eng) * global_map->topo_sample_map.size());
+            pt = global_map->topo_sample_map[idx2];
+            pt_idx = global_map->coord2gridIndex(pt);
+            if (pt_idx.x() >= 0 && pt_idx.x() < global_map->GLX_SIZE &&
+                pt_idx.y() >= 0 && pt_idx.y() < global_map->GLY_SIZE &&
+                !global_map->isStaticOccupied(pt_idx.x(), pt_idx.y(), false)) {
+                return pt;
+            }
+        }
+    }
     return pt;
 }
 
@@ -957,7 +1033,10 @@ bool TopoSearcher::lineVisib(const Eigen::Vector3d& p1, const Eigen::Vector3d& p
             return false;
         }
 
-        if (global_map->isOccupied(pt_idx, pt_idy, pt_idz, second_height)){
+        // (Fix 53a) Use static-only occupancy for topo graph construction.
+        // Live obstacles (l_data) were disconnecting the PRM graph entirely,
+        // making ALL pathfinding fail when lidar detects ANY obstacle.
+        if (global_map->isStaticOccupied(pt_idx, pt_idy, second_height)){
             return false;
         }
         last_height = height;

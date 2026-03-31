@@ -20,6 +20,10 @@ void Vislization::init(ros::NodeHandle &nh)
     obs_vis_pub = nh.advertise<visualization_msgs::Marker>("obs", 1);
     topo_path_point_vis_pub = nh.advertise<visualization_msgs::Marker>("topo_point", 1);
     topo_path_vis_pub = nh.advertise<visualization_msgs::Marker>("topo_point_path", 1);
+    // (Fix 53c) Pipeline stage visualization
+    minco_input_vis_pub = nh.advertise<visualization_msgs::Marker>("minco_input_vis", 1);
+    minco_output_vis_pub = nh.advertise<visualization_msgs::Marker>("minco_output_vis", 1);
+    reference_line_vis_pub = nh.advertise<visualization_msgs::Marker>("reference_line_vis", 1);
 }
 
 
@@ -553,4 +557,63 @@ void Vislization::visTopoPointConnection(std::vector<GraphNode::Ptr> global_grap
     topo_position_connection_vis_pub.publish(node_vis);
     topo_line_vis_pub.publish(line_strip);
 //    topo_path_vis_pub.publish(line_strip2);
+}
+
+// ── (Fix 53c) Pipeline stage visualization functions ──
+
+void Vislization::visMincoInput(const std::vector<Eigen::Vector2d>& pts) {
+    visualization_msgs::Marker m;
+    m.header.frame_id = "map";
+    m.header.stamp = ros::Time::now();
+    m.ns = "minco_input";
+    m.type = visualization_msgs::Marker::SPHERE_LIST;
+    m.action = visualization_msgs::Marker::ADD;
+    m.id = 0;
+    m.pose.orientation.w = 1.0;
+    m.scale.x = 0.08; m.scale.y = 0.08; m.scale.z = 0.08;
+    m.color.r = 1.0; m.color.g = 0.5; m.color.b = 0.0; m.color.a = 1.0; // orange
+    for (auto& p : pts) {
+        geometry_msgs::Point gp;
+        gp.x = p.x(); gp.y = p.y(); gp.z = 0.05;
+        m.points.push_back(gp);
+    }
+    minco_input_vis_pub.publish(m);
+}
+
+void Vislization::visMincoOutput(const std::vector<Eigen::Vector2d>& pts) {
+    visualization_msgs::Marker m;
+    m.header.frame_id = "map";
+    m.header.stamp = ros::Time::now();
+    m.ns = "minco_output";
+    m.type = visualization_msgs::Marker::LINE_STRIP;
+    m.action = visualization_msgs::Marker::ADD;
+    m.id = 0;
+    m.pose.orientation.w = 1.0;
+    m.scale.x = 0.06;
+    m.color.r = 0.0; m.color.g = 1.0; m.color.b = 0.0; m.color.a = 1.0; // green
+    for (auto& p : pts) {
+        geometry_msgs::Point gp;
+        gp.x = p.x(); gp.y = p.y(); gp.z = 0.05;
+        m.points.push_back(gp);
+    }
+    minco_output_vis_pub.publish(m);
+}
+
+void Vislization::visReferenceLine(const std::vector<Eigen::Vector3d>& pts) {
+    visualization_msgs::Marker m;
+    m.header.frame_id = "map";
+    m.header.stamp = ros::Time::now();
+    m.ns = "reference_line";
+    m.type = visualization_msgs::Marker::LINE_STRIP;
+    m.action = visualization_msgs::Marker::ADD;
+    m.id = 0;
+    m.pose.orientation.w = 1.0;
+    m.scale.x = 0.04;
+    m.color.r = 1.0; m.color.g = 0.0; m.color.b = 1.0; m.color.a = 1.0; // magenta
+    for (auto& p : pts) {
+        geometry_msgs::Point gp;
+        gp.x = p.x(); gp.y = p.y(); gp.z = 0.05;
+        m.points.push_back(gp);
+    }
+    reference_line_vis_pub.publish(m);
 }

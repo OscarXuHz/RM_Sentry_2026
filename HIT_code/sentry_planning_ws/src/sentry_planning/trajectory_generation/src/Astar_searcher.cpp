@@ -109,6 +109,19 @@ std::vector<Eigen::Vector3d> AstarPathFinder::smoothTopoPath(std::vector<Eigen::
     {
         return topo_path;
     }
+    // ── DIAGNOSTIC: log input topo path ──
+    ROS_WARN("[smoothTopoPath] INPUT size=%zu", topo_path.size());
+    for (size_t k = 0; k < topo_path.size(); k++) {
+        ROS_WARN("[smoothTopoPath]   in[%zu]: (%.3f, %.3f, %.3f)", k,
+                 topo_path[k].x(), topo_path[k].y(), topo_path[k].z());
+    }
+    // Test direct start→end visibility
+    {
+        Eigen::Vector3d cp;
+        bool dv = lineVisib(topo_path.back(), topo_path.front(), cp, 0.05, 2);
+        ROS_WARN("[smoothTopoPath] lineVisib(start→end): %s  colli=(%.2f,%.2f)",
+                 dv ? "TRUE(!)" : "false", cp.x(), cp.y());
+    }
     Eigen::Vector3d tail_pos, colli_pt;
     std::vector<Eigen::Vector3d> smooth_path;
     Eigen::Vector3d head_pos = topo_path[0];
@@ -117,12 +130,17 @@ std::vector<Eigen::Vector3d> AstarPathFinder::smoothTopoPath(std::vector<Eigen::
     bool collision = true;
     double last_height = head_pos.z();  // 初始化高度为起点高度，防止起点在桥洞区域
     int iter_count = 0;
+    Eigen::Vector3d prev_head_pos = head_pos;  // (Fix 53d) Track previous head for stuck detection
+    int stuck_count = 0;
 
     while(collision)  // 如果迭代到最后一个点不出现碰撞，则认为可以直接把当前点连接到终点，整体优化完毕
     {
         iter_count++;
-        if(iter_count > 1000){
-            ROS_WARN("[A Star ERROR] -------- generated trajectory is not safe! --------");
+        if(iter_count > 500){
+            // (Fix 47b) Reduced from 1000; if still looping after 500 iterations
+            // the pruning is stuck.  Return the partial smooth path accumulated so
+            // far plus the remaining raw topo path from the current head position.
+            ROS_WARN("[smoothTopoPath] iteration limit (%d), returning partial smooth + raw tail", iter_count);
             break;
         }
         collision = false;
@@ -155,19 +173,27 @@ std::vector<Eigen::Vector3d> AstarPathFinder::smoothTopoPath(std::vector<Eigen::
                     }
                 }
 
-                if(global_map->isOccupied(temp_id.x(), temp_id.y(), temp_id.z(), second_height)){
+                // (Fix 54c) Use isStaticOccupied — consistent with topo search (Fix 53a).
+                // Live lidar obstacles caused detour loops in smoothing.
+                if(global_map->isStaticOccupied(temp_id.x(), temp_id.y(), second_height)){
                     // (Fix 16) Occupied waypoint on topo path — treat as collision to
                     // prevent visibility shortcutting from creating paths that graze obstacles
                     if(!collision){
                         collision = true;
                         temp = tail_pos;
                         bool easy = getNearPoint(temp, head_pos, temp);
+                        // (Fix 53b) Fallback: if getNearPoint produced NaN, use nearest topo node
+                        if (std::isnan(temp.x()) || std::isnan(temp.y())) {
+                            temp = topo_path[std::min(i + 1, (int)topo_path.size() - 1)];
+                        }
                         iter_idx = i;
                     }
                     continue;
                 }
 
-                if (!lineVisib(tail_pos, head_pos, colli_pt, 0.05) && !collision){  // 记录最近的可见点的第一个不可见点，这样如果中间又有可见的点是就可以把collision改成true
+                // (Fix 49c) Reduced cell_margin from 3→2 (0.10m) to allow more direct paths
+                // while still maintaining safety beyond the 0.35m inflation.
+                if (!lineVisib(tail_pos, head_pos, colli_pt, 0.05, 2) && !collision){  // 记录最近的可见点的第一个不可见点
                     collision = true;
                     Eigen::Vector3i temp_id = global_map->coord2gridIndex(tail_pos);
                     temp = {topo_path[i].x() + (j) * 0.05 * x_offset / distance,
@@ -175,15 +201,37 @@ std::vector<Eigen::Vector3d> AstarPathFinder::smoothTopoPath(std::vector<Eigen::
                             last_height};
                     temp = tail_pos;
                     bool easy = getNearPoint(temp, head_pos, temp);
+                    // (Fix 53b) Fallback: if getNearPoint produced NaN, use nearest topo node
+                    if (std::isnan(temp.x()) || std::isnan(temp.y())) {
+                        temp = topo_path[std::min(i + 1, (int)topo_path.size() - 1)];
+                    }
                     iter_idx = i;
                 }
-                else if (lineVisib(tail_pos, head_pos, colli_pt, 0.05)){
+                else if (lineVisib(tail_pos, head_pos, colli_pt, 0.05, 2)){
                     // 这里的意思是，只要最后一段可见，就不用再检查了，直接连。即为连接最后一个可见的topo点
                     collision = false;
                 }
             }
         }
         if(collision){
+            // (Fix 53d) Stuck detection: if head_pos barely moved, skip to next topo waypoint
+            double head_shift = (temp.head<2>() - prev_head_pos.head<2>()).norm();
+            if (head_shift < 0.05) {
+                stuck_count++;
+                if (stuck_count >= 1) {
+                    // (Fix 53e) Skip to the endpoint of the current topo segment.
+                    // Previously used topo_path[skip+1] which jumped 2 nodes ahead,
+                    // losing critical intermediate waypoints around walls.
+                    int next_wp = std::min(iter_idx + 1, (int)topo_path.size() - 1);
+                    temp = topo_path[next_wp];
+                    iter_idx = next_wp;  // next iteration starts from this segment
+                    stuck_count = 0;
+                    ROS_WARN("[smoothTopoPath] stuck detected, skipping to topo[%d]", next_wp);
+                }
+            } else {
+                stuck_count = 0;
+            }
+            prev_head_pos = head_pos;
             head_pos = temp;
 //            last_height = head_pos.z();
             smooth_path.push_back(temp);
@@ -193,14 +241,49 @@ std::vector<Eigen::Vector3d> AstarPathFinder::smoothTopoPath(std::vector<Eigen::
         }
 
     }
-    if(iter_count>1000){
+    // (Fix 53e) Dedup: remove consecutive near-duplicate points (<0.1m apart)
+    auto dedup = [](std::vector<Eigen::Vector3d>& path) {
+        if (path.size() < 3) return;
+        std::vector<Eigen::Vector3d> clean;
+        clean.push_back(path.front());
+        for (size_t i = 1; i < path.size() - 1; i++) {
+            if ((path[i].head<2>() - clean.back().head<2>()).norm() > 0.1)
+                clean.push_back(path[i]);
+        }
+        clean.push_back(path.back()); // always keep end
+        path = clean;
+    };
+
+    if(iter_count > 500){
+        // (Fix 47b) Build a safe fallback: the partial smooth_path we have so far
+        // plus the remaining raw topo nodes from the current head_pos onward.
+        if (smooth_path.size() >= 2) {
+            double min_d = 1e9;
+            int best_idx = (int)topo_path.size() - 1;
+            for (int k = 0; k < (int)topo_path.size(); k++) {
+                double d = (topo_path[k].head<2>() - head_pos.head<2>()).norm();
+                if (d < min_d) { min_d = d; best_idx = k; }
+            }
+            for (int k = best_idx + 1; k < (int)topo_path.size(); k++) {
+                smooth_path.push_back(topo_path[k]);
+            }
+            dedup(smooth_path);
+            ROS_WARN("[smoothTopoPath] fallback: %zu pts after dedup", smooth_path.size());
+            return smooth_path;
+        }
         return topo_path;
+    }
+    dedup(smooth_path);
+    ROS_WARN("[smoothTopoPath] OUTPUT size=%zu, iter_count=%d", smooth_path.size(), iter_count);
+    for (size_t k = 0; k < smooth_path.size(); k++) {
+        ROS_WARN("[smoothTopoPath]   out[%zu]: (%.3f, %.3f, %.3f)", k,
+                 smooth_path[k].x(), smooth_path[k].y(), smooth_path[k].z());
     }
     return smooth_path;
 
 }
 
-bool AstarPathFinder::lineVisib(const Eigen::Vector3d& p1, const Eigen::Vector3d& p2, Eigen::Vector3d& colli_pt, double thresh)
+bool AstarPathFinder::lineVisib(const Eigen::Vector3d& p1, const Eigen::Vector3d& p2, Eigen::Vector3d& colli_pt, double thresh, int cell_margin)
 {
     double ray_ptx, ray_pty, ray_ptz;
     double p2_x, p2_y, p2_z, p1_x, p1_y, p1_z;
@@ -256,12 +339,36 @@ bool AstarPathFinder::lineVisib(const Eigen::Vector3d& p1, const Eigen::Vector3d
         }
 
 
-        if (global_map->isOccupied(pt_idx, pt_idy, pt_idz, second_height)){
+        // (Fix 54c) Use isStaticOccupied — consistent with topo search (Fix 53a).
+        if (global_map->isStaticOccupied(pt_idx, pt_idy, second_height)){
             Eigen::Vector3i temp_idx = {pt_idx, pt_idy, pt_idz};
             colli_pt = global_map->gridIndex2coord(temp_idx);
             return false;
         }
-        else if (height - last_height >= 0.12)
+        // (Fix 47a) Safety margin: check cells at ±cell_margin offsets in cardinal
+        // directions.  This ensures the shortcut maintains clearance from obstacles
+        // beyond the base inflation radius, preventing near-miss pruning.
+        // (Fix 54c) All margin checks also use isStaticOccupied.
+        if (cell_margin > 0) {
+            bool margin_hit = false;
+            for (int m = 1; m <= cell_margin && !margin_hit; m++) {
+                int mx, my;
+                mx = pt_idx + m; my = pt_idy;
+                if (mx < global_map->GLX_SIZE && global_map->isStaticOccupied(mx, my, second_height)) { margin_hit = true; break; }
+                mx = pt_idx - m;
+                if (mx >= 0 && global_map->isStaticOccupied(mx, my, second_height)) { margin_hit = true; break; }
+                mx = pt_idx; my = pt_idy + m;
+                if (my < global_map->GLY_SIZE && global_map->isStaticOccupied(mx, my, second_height)) { margin_hit = true; break; }
+                my = pt_idy - m;
+                if (my >= 0 && global_map->isStaticOccupied(mx, my, second_height)) { margin_hit = true; break; }
+            }
+            if (margin_hit) {
+                Eigen::Vector3i temp_idx = {pt_idx, pt_idy, pt_idz};
+                colli_pt = global_map->gridIndex2coord(temp_idx);
+                return false;
+            }
+        }
+        if (height - last_height >= 0.12)
         {
             Eigen::Vector3i temp_idx = {pt_idx, pt_idy, pt_idz};
             colli_pt = global_map->gridIndex2coord(temp_idx);
@@ -287,15 +394,23 @@ bool AstarPathFinder::getNearPoint(Eigen::Vector3d headPos, Eigen::Vector3d tail
     {
         double delta_x = headPos.x() - tailPos.x();
         double delta_y = headPos.y() - tailPos.y();
+        // (Fix 53b) Guard against division by zero when headPos ≈ tailPos.
+        // This caused NaN coordinates that poisoned the entire downstream
+        // pipeline (MINCO → reference_path → straight-line trajectory).
+        double norm = std::sqrt(delta_x * delta_x + delta_y * delta_y);
+        if (norm < 1e-6) {
+            best_point = headPos;
+            return false;
+        }
         Eigen::Vector3d collision_pt;
 
         Eigen::Vector3d headPos_left, headPos_right;
-        headPos_left.x() = headPos.x() + check_distance * delta_y / (sqrt(pow(delta_y, 2) + pow(delta_x, 2)));
-        headPos_left.y() = headPos.y() - check_distance * delta_x / (sqrt(pow(delta_y, 2) + pow(delta_x, 2)));
+        headPos_left.x() = headPos.x() + check_distance * delta_y / norm;
+        headPos_left.y() = headPos.y() - check_distance * delta_x / norm;
         headPos_left.z() = headPos.z();
 
-        headPos_right.x() = headPos.x() - check_distance * delta_y / (sqrt(pow(delta_y, 2) + pow(delta_x, 2)));
-        headPos_right.y() = headPos.y() + check_distance * delta_x / (sqrt(pow(delta_y, 2) + pow(delta_x, 2)));
+        headPos_right.x() = headPos.x() - check_distance * delta_y / norm;
+        headPos_right.y() = headPos.y() + check_distance * delta_x / norm;
         headPos_right.z() = headPos.z();
 
         Vector3i tempID_left = global_map->coord2gridIndex(headPos_left);
@@ -329,7 +444,8 @@ bool AstarPathFinder::checkPointCollision(Eigen::Vector3i path_point, int check_
             path_succ.x() = path_point.x() + idx;
             path_succ.y() = path_point.y() + jdx;
             path_succ.z() = path_point.z();
-            if (global_map->isOccupied(path_succ, false))
+            // (Fix 54c) Use isStaticOccupied for collision swell check
+            if (global_map->isStaticOccupied(path_succ, false))
             {
                 return true;
             }

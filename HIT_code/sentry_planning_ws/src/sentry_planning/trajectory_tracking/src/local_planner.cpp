@@ -165,6 +165,15 @@ void LocalPlanner::linearation(double time, double robot_cur_yaw)
             std::vector<ObsEntry> candidates;
 
             // Helper: search a window around a center point and add obstacles
+            // Fix 55b: Correct obstacle type classification.
+            // Previously, ANY cell with l_data>0 got type=1 (dynamic, 0.4m clearance),
+            // including static walls visible to lidar. In corridors, BOTH walls get
+            // type=1 → MPC needs 0.4m clearance from each → not enough space → barrier
+            // overwhelms tracking cost → negative v_ctrl → robot stuck.
+            // Now: if a lidar cell is near a static map entry (±STATIC_NBR cells),
+            // classify as type=0 (static, 0.2m clearance). Only genuinely dynamic
+            // obstacles (no nearby static entry) get type=1.
+            static const int STATIC_NBR = 6;  // Fix 60: ±6 cells = ±0.3m (was 4) for localization drift
             auto searchWindow = [&](const Eigen::Vector3i& center_idx) {
                 for(int di = -OBS_SEARCH_HALF; di <= OBS_SEARCH_HALF; di++){
                     for(int dj = -OBS_SEARCH_HALF; dj <= OBS_SEARCH_HALF; dj++){
@@ -175,7 +184,19 @@ void LocalPlanner::linearation(double time, double robot_cur_yaw)
                             Eigen::Vector3d temp_pos = global_map->gridIndex2coord(temp_idx);
                             double dx = ref_trajectory[i].x() - temp_pos.x();
                             double dy = ref_trajectory[i].y() - temp_pos.y();
-                            int type = global_map->isLocalOccupied(nx, ny, center_idx.z()) ? 1 : 0;
+                            int type = 0;  // default: static
+                            if (global_map->isLocalOccupied(nx, ny, center_idx.z())) {
+                                // Lidar sees something here. Is it a known wall?
+                                if (global_map->data[nx * global_map->GLY_SIZE + ny] != 1) {
+                                    // Fix 61b: Use precomputed dilated static map instead of O(169) inner loop
+                                    if (nx >= 0 && nx < global_map->GLX_SIZE &&
+                                        ny >= 0 && ny < global_map->GLY_SIZE &&
+                                        !global_map->near_static_data[nx * global_map->GLY_SIZE + ny]) {
+                                        type = 1;  // genuinely dynamic
+                                    }
+                                }
+                                // else: exact cell in static map → type stays 0
+                            }
                             candidates.push_back({dx*dx + dy*dy, type, temp_pos});
                             if(type == 1) unknown_obs_exist = true;
                         }
@@ -303,16 +324,13 @@ void LocalPlanner::linearation(double time, double robot_cur_yaw)
     // OCS2 SqpMpc uses nThreads=2; if the solver fails mid-solve, its threads
     // may still be running when reset() destroys the object -> use-after-free.
     if (!mpcSolverPtr_) {
-        // Fix 42b: μ=20, δ=1.0.  With reference repulsion disabled and
-        //   ~100 total obstacles (8 sectors × 20 steps), the barrier is
-        //   the SOLE avoidance mechanism.  μ=20 gives per-obstacle penalty
-        //   ~40 at the constraint boundary → with 5 obs/step, total
-        //   barrier ~200/step vs Q tracking ~75/step at 0.5m deviation
-        //   → barrier dominates near obstacles.
-        //   Gradient at h=δ: -μ/δ = -20 (sufficient with aligned reference)
-        //   Static influence: sqrt(0.25+1.0) = 1.12m
-        //   Dynamic influence: sqrt(0.49+1.0) = 1.22m
-        ocs2::RelaxedBarrierPenalty::Config barriercollisionPenaltyConfig(20.0, 1.0);
+        // Fix 46f: μ=20, δ=0.5. Fix 44b's μ=40 δ=1.0 was too strong for
+        //   narrow corridors — even at 0.3m from an obstacle, barrier
+        //   penalty dominated Q=150 tracking cost → v_ctrl = 0.
+        //   With μ=20 δ=0.5 and reduced thresholds (0.04/0.16),
+        //   the barrier only activates close to obstacles and doesn't
+        //   overpower position tracking.
+        ocs2::RelaxedBarrierPenalty::Config barriercollisionPenaltyConfig(20.0, 0.5);
         stateCollisionSoftConstraintPtr = std::make_unique<ocs2::StateSoftConstraint>(std::make_unique<SentryCollisionConstraint>(mpcInterface_.obsConstraintPtr_), std::make_unique<ocs2::RelaxedBarrierPenalty>(barriercollisionPenaltyConfig));
         mpcInterface_.problem_.stateSoftConstraintPtr->add("stateCollisionBounds", std::move(stateCollisionSoftConstraintPtr));
 
@@ -326,7 +344,7 @@ void LocalPlanner::linearation(double time, double robot_cur_yaw)
         hSet.reg_prim    = 1e-8;                 // was 1e-12
         mpcInterface_.sqpSettings().printSolverStatus = false;
         ROS_INFO("[LocalPlanner] HPIPM: mode=ROBUST, reg_prim=1e-8");
-        ROS_INFO("[LocalPlanner] Fix 43: barrier mu=20 delta=1.0, SECTORS=8, searchHalf=20, maxObs1.0m, NO_REPULSION, MAX_LEAD=0.5s, no_bridge_gate");
+        ROS_INFO("[LocalPlanner] Fix 46f: barrier mu=20 delta=0.5, distStatic=0.04, distDynamic=0.16");
 
         mpcSolverPtr_.reset(new ocs2::SqpMpc(mpcInterface_.mpcSettings(), mpcInterface_.sqpSettings(), mpcInterface_.getOptimalControlProblem(), mpcInterface_.getInitializer()));
         ROS_INFO("[LocalPlanner] MPC solver created (one-time init)");
@@ -397,24 +415,22 @@ void LocalPlanner::getFightTrackingTraj(Eigen::Vector3d state, double time, doub
                 // Fix 34b: Hysteresis for speed_direction to prevent frame-to-frame
                 // flip-flopping at the ±π/2 boundary. Use different thresholds for
                 // entering vs exiting reverse mode.
+                // Fix 57: DISABLED — Robot is OMNIDIRECTIONAL.  speed_direction=-1
+                // made ref_speed negative, confusing the MPC: the solver tried to
+                // produce negative v_ctrl to match, which was then clamped to 0
+                // (Fix 45c) → robot frozen.  With Fix 56 (v_ctrl flip instead of
+                // clamp), negative ref_speed is less harmful but still unnecessary.
+                // An omni robot can move in any direction at any heading, so there
+                // is no concept of "reverse."
+                // Always keep speed_direction = 1.
             {
-                static const double THRESH_ENTER_REVERSE = M_PI * 0.6;   // 108° to enter reverse
-                static const double THRESH_EXIT_REVERSE  = M_PI * 0.35;  // 63° to exit reverse
-                double yaw_diff = std::abs(ref_phi[i] - phi);
-                if (speed_direction == 1 && yaw_diff > THRESH_ENTER_REVERSE) {
-                    speed_direction = -1;
-                } else if (speed_direction == -1 && yaw_diff < THRESH_EXIT_REVERSE) {
-                    speed_direction = 1;
-                }
-                // else: keep current speed_direction (hysteresis band)
+                speed_direction = 1;
             }
-            if (speed_direction == -1) {
-                ref_phi[i] = (ref_phi[i] - phi > 0) ? (phi + M_PI) : (phi - M_PI);
-                ref_speed.push_back(speed_direction * sqrt(pow(ref_velocity[i](1), 2) +
-                                         pow(ref_velocity[i](0), 2)));
-            } else {
-                ref_phi[i] = (phi);
-                ref_speed.push_back(speed_direction * sqrt(pow(ref_velocity[i](1), 2) +
+            // Fix 57: speed_direction is always 1 now (omni robot).
+            // No reverse mode needed — always use velocity direction as heading.
+            {
+                ref_phi[i] = phi;
+                ref_speed.push_back(sqrt(pow(ref_velocity[i](1), 2) +
                                          pow(ref_velocity[i](0), 2)));
             }
         }else{
@@ -426,17 +442,14 @@ void LocalPlanner::getFightTrackingTraj(Eigen::Vector3d state, double time, doub
 
             if (ref_phi[i - 1] - phi > M_PI_2) {   /// 平滑处理
                 ref_phi.push_back(phi + M_PI);
-                ref_speed.push_back(speed_direction * sqrt(pow(ref_velocity[i](1), 2) +
-                                         pow(ref_velocity[i](0), 2)));
             } else if (ref_phi[i - 1] - phi < -M_PI_2) {
                 ref_phi.push_back(phi - M_PI);
-                ref_speed.push_back(speed_direction * sqrt(pow(ref_velocity[i](1), 2) +
-                                         pow(ref_velocity[i](0), 2)));
             } else{
                 ref_phi.push_back(phi);
-                ref_speed.push_back(speed_direction * sqrt(pow(ref_velocity[i](1), 2) +
-                                         pow(ref_velocity[i](0), 2)));
             }
+            // Fix 57: speed_direction always 1  
+            ref_speed.push_back(sqrt(pow(ref_velocity[i](1), 2) +
+                                     pow(ref_velocity[i](0), 2)));
         }
         last_phi = phi;
 
@@ -461,10 +474,12 @@ void LocalPlanner::getFightTrackingTraj(Eigen::Vector3d state, double time, doub
     //
     // Fix: Use min(step_scale, horizon_scale) instead of multiplication.
     // This applies the TIGHTER of the two reductions, not both.
-    // Also raised OBS_MIN_SCALE from 0.15 to 0.25 to prevent excessive braking.
+    // Fix 58: Reduced OBS_MIN_SCALE 0.25→0.15 since Fix 56 removes the
+    // v_ctrl clamp that was the real cause of move-stop.  Stronger braking
+    // near obstacles is now safe because the robot won't just freeze.
     {
         static const double OBS_SLOW_DIST = 1.5;   // start braking at 1.5m
-        static const double OBS_MIN_SCALE = 0.25;   // Fix 42d: 0.15→0.25; less extreme braking
+        static const double OBS_MIN_SCALE = 0.15;   // Fix 58: 0.25→0.15; stronger braking near obstacles
 
         // Pass 1: find tightest obstacle across entire horizon
         double min_horizon_obs_dist = 1e9;
@@ -499,6 +514,22 @@ void LocalPlanner::getFightTrackingTraj(Eigen::Vector3d state, double time, doub
             // Use the tighter reduction, not both
             double effective_scale = std::min(step_scale, horizon_scale);
             ref_speed[i] *= effective_scale;
+        }
+    }
+
+    // Fix 58b: Curvature-based speed reduction.
+    // When the reference path has sharp turns, reduce speed to prevent
+    // overshooting the turn.  This fixes the "can't stop for turns" issue.
+    {
+        static const double TURN_SLOW_RATE = 0.5;  // radians/step threshold for braking
+        static const double TURN_MIN_SCALE = 0.3;  // minimum speed fraction at sharp turns
+        for (int i = 1; i < (int)ref_phi.size(); i++) {
+            double dphi = std::abs(std::remainder(ref_phi[i] - ref_phi[i-1], 2.0 * M_PI));
+            if (dphi > TURN_SLOW_RATE) {
+                double turn_scale = TURN_MIN_SCALE
+                    + (1.0 - TURN_MIN_SCALE) * std::max(0.0, 1.0 - (dphi - TURN_SLOW_RATE) / (M_PI - TURN_SLOW_RATE));
+                ref_speed[i] *= turn_scale;
+            }
         }
     }
 
@@ -983,18 +1014,31 @@ bool LocalPlanner::checkfeasible()
     // path naturally deviates slightly toward inflated static walls, triggering
     // perpetual replanning that killed velocity.
     // Fix 42e: Reduced horizon from 50% to 25% (steps 1-5, covering 0.5s).
-    // At 50%, the predicted path at steps 5-10 deviates 1+ meters from the
-    // reference (maxDev can reach 3m+).  The obstacle search only covers
-    // ±1.0m around the reference, so obstacles near the deviated prediction
-    // are invisible to the MPC → prediction goes through them →
-    // checkfeasible fires "not safe" every frame → perpetual replan.
-    // At 25%, we only check steps 1-5 where the prediction is still close
-    // to the robot and reference.  The barrier handles steps 6+ internally.
+    // Fix 48: Only flag dynamic-only obstacles.
+    //
+    // Fix 55: Expand static-map skip to ±2 cell neighborhood.
+    // The exact-cell check (data[flat]==1) misses static walls when lidar
+    // quantization places the hit 1-2 cells away from the static map entry.
+    // This caused perpetual "MPC is not safe" → replan every ~5s → robot
+    // moves-pauses-changes-direction.  Checking a ±2 neighborhood eliminates
+    // the grid-quantization false positives.
+    // Fix 55/55b/60: Static wall neighborhood check.
+    // STATIC_CHECK_RADIUS=8 was ±0.4m.  Localization drift can exceed 0.4m
+    // near map edges or after fast motion → lidar walls displaced by >0.4m
+    // from static map → false dynamic obstacle detection → perpetual replan.
+    // Fix 60: Increase to 12 (±0.6m) for better localization drift tolerance.
+    static const int STATIC_CHECK_RADIUS = 12;  // (Fix 60) was 8
     for(int i = 1; i < (int)(predictState.size() * 0.25); i++){
         int idx, idy, idz;
         double pt_z = 0.0;
         global_map->coord2gridIndex(predictState[i](0), predictState[i](1), pt_z, idx, idy, idz);
         if (global_map->isLocalOccupied(idx, idy, idz)){
+            // Fix 61c: Use precomputed dilated static map instead of O(625) inner loop
+            if (idx >= 0 && idx < global_map->GLX_SIZE &&
+                idy >= 0 && idy < global_map->GLY_SIZE &&
+                global_map->near_static_data[idx * global_map->GLY_SIZE + idy]) {
+                continue;  // static wall seen by lidar — not a new obstacle
+            }
             return true;
         }
     }

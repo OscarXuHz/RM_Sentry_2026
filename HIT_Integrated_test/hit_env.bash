@@ -19,9 +19,11 @@ _REPO_ROOT="$(cd "${_HIT_DIR}/.." && pwd)"
 source "${_HIT_DIR}/sim_nav/devel/setup.bash"
 
 # Add DecisionNode workspace so roslaunch can find decision_node (mcu_communicator)
-export ROS_PACKAGE_PATH="${_REPO_ROOT}/DecisionNode/src:${ROS_PACKAGE_PATH}"
-export CMAKE_PREFIX_PATH="${_REPO_ROOT}/DecisionNode/devel:${CMAKE_PREFIX_PATH}"
-export LD_LIBRARY_PATH="${_REPO_ROOT}/DecisionNode/devel/lib:${LD_LIBRARY_PATH}"
+# Points to top-level AstarTraining/DecisionNode (canonical, up-to-date copy)
+_DECISION_NODE="$(cd "${_REPO_ROOT}/.." && pwd)/DecisionNode"
+export ROS_PACKAGE_PATH="${_DECISION_NODE}/src:${ROS_PACKAGE_PATH}"
+export CMAKE_PREFIX_PATH="${_DECISION_NODE}/devel:${CMAKE_PREFIX_PATH}"
+export LD_LIBRARY_PATH="${_DECISION_NODE}/devel/lib:${LD_LIBRARY_PATH}"
 
 echo "[HIT env] Active workspace chain:"
 python3 << 'EOF'

@@ -522,11 +522,10 @@ void GlobalMap::topoSampleMap(cv::Mat topo_map)
                     // computed (stays at default 0.08), creating phantom guard points
                     // at a wrong z-height that appear as a second visible layer.
 
-                    for(int idx = -1; idx < 2; idx++){
-                        for(int idy = -1; idy < 2; idy++){
-                            topo_map.at<uchar>(i + idx, j + idy) = 0;
-                        }
-                    }
+                    // (Fix 51d) Only zero the center pixel, not the 3×3 neighborhood.
+                    // The old 3×3 zeroing destroyed adjacent branch pixels, creating
+                    // sampling gaps at corners/junctions where connectivity matters most.
+                    topo_map.at<uchar>(i, j) = 0;
                 }
                 if(keypoint == 3){
                     int pt_idx, pt_idy, pt_idz;
@@ -834,12 +833,13 @@ bool GlobalMap::isOccupied(const Eigen::Vector3i &index, bool second_height) con
 
 bool GlobalMap::isStaticOccupied(const int &idx_x, const int &idx_y, bool second_height) const
 {
+    // (Fix 51a) Out-of-bounds = occupied
+    if(idx_x < 0 || idx_x >= GLX_SIZE || idx_y < 0 || idx_y >= GLY_SIZE)
+        return true;
     if(second_height){
-        return (idx_x >= 0 && idx_x < GLX_SIZE && idx_y >= 0 && idx_y < GLY_SIZE &&
-                (data[idx_x * GLY_SIZE + idx_y] == 1 || GridNodeMap[idx_x][idx_y]->second_local_occupancy == true));
+        return (data[idx_x * GLY_SIZE + idx_y] == 1 || GridNodeMap[idx_x][idx_y]->second_local_occupancy == true);
     }
-    return (idx_x >= 0 && idx_x < GLX_SIZE && idx_y >= 0 && idx_y < GLY_SIZE &&
-            (data[idx_x * GLY_SIZE + idx_y] == 1));
+    return (data[idx_x * GLY_SIZE + idx_y] == 1);
 }
 
 bool GlobalMap::isStaticOccupied(const Eigen::Vector3i &index, bool second_height) const
@@ -858,20 +858,23 @@ bool GlobalMap::isFree(const Eigen::Vector3i &index) const
 }
 
 bool GlobalMap::isOccupied(const int &idx_x, const int &idx_y, const int &idx_z, bool second_height) const
-{  // 桥洞区域判断是否被占用需要特意处理
+{  // (Fix 51a) Out-of-bounds = occupied. Previously returned FALSE,
+    // which let guards/paths be created outside the map boundary,
+    // bypassing walls entirely.
+    if(idx_x < 0 || idx_x >= GLX_SIZE || idx_y < 0 || idx_y >= GLY_SIZE)
+        return true;
     if(second_height){
-        return (idx_x >= 0 && idx_x < GLX_SIZE && idx_y >= 0 && idx_y < GLY_SIZE &&
-                (data[idx_x * GLY_SIZE + idx_y] == 1 || GridNodeMap[idx_x][idx_y]->second_local_occupancy == true));
+        return (data[idx_x * GLY_SIZE + idx_y] == 1 || GridNodeMap[idx_x][idx_y]->second_local_occupancy == true);
     }
-    return (idx_x >= 0 && idx_x < GLX_SIZE && idx_y >= 0 && idx_y < GLY_SIZE && idx_z >= 0 &&
-            (data[idx_x * GLY_SIZE + idx_y] == 1 || l_data[idx_x * GLY_SIZE + idx_y] > 0));
+    return (data[idx_x * GLY_SIZE + idx_y] == 1 || l_data[idx_x * GLY_SIZE + idx_y] > 0);
 }
 
 bool GlobalMap::isLocalOccupied(const int &idx_x, const int &idx_y, const int &idx_z) const
 {
-    return (idx_x >= 0 && idx_x < GLX_SIZE && idx_y >= 0 && idx_y < GLY_SIZE && idx_z >= 0 && idx_z < GLZ_SIZE &&
-            (l_data[idx_x * GLY_SIZE + idx_y] > 0));
-
+    // (Fix 51a) Out-of-bounds = occupied
+    if(idx_x < 0 || idx_x >= GLX_SIZE || idx_y < 0 || idx_y >= GLY_SIZE)
+        return true;
+    return (l_data[idx_x * GLY_SIZE + idx_y] > 0);
 }
 
 bool GlobalMap::isFree(const int &idx_x, const int &idx_y, const int &idx_z) const

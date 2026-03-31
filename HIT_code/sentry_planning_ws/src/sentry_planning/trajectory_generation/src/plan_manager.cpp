@@ -279,8 +279,44 @@ bool planner_manager::pathFinding(const Eigen::Vector3d start_pt, const Eigen::V
     }
     /* 提取出路径（将路径节点都放到一个容器里） */
 
+    // ── DIAGNOSTIC: dump topo Dijkstra path before smoothing ──
+    ROS_WARN("[DIAG] origin_path (Dijkstra) size: %zu", origin_path.size());
+    for (size_t k = 0; k < origin_path.size(); k++) {
+        ROS_WARN("[DIAG]   origin[%zu]: (%.3f, %.3f, %.3f)", k,
+                 origin_path[k].x(), origin_path[k].y(), origin_path[k].z());
+    }
+    // Check direct start→end visibility through Astar lineVisib
+    {
+        Eigen::Vector3d colli_diag;
+        bool direct_vis = astar_path_finder->lineVisib(
+            origin_path.back(), origin_path.front(), colli_diag, 0.05, 2);
+        ROS_WARN("[DIAG] lineVisib(start→end DIRECT): %s  colli=(%.2f,%.2f)",
+                 direct_vis ? "TRUE(!!)" : "false",
+                 colli_diag.x(), colli_diag.y());
+        // Also check raw occupancy along the direct line
+        int wall_cells = 0;
+        double dx = origin_path.back().x() - origin_path.front().x();
+        double dy = origin_path.back().y() - origin_path.front().y();
+        double dist = std::sqrt(dx*dx + dy*dy);
+        int nsteps = (int)(dist / 0.05);
+        for (int s = 0; s <= nsteps; s++) {
+            double px = origin_path.front().x() + s * 0.05 * dx / dist;
+            double py = origin_path.front().y() + s * 0.05 * dy / dist;
+            Eigen::Vector3d pp(px, py, 0);
+            Eigen::Vector3i gi = global_map->coord2gridIndex(pp);
+            if (global_map->isOccupied(gi.x(), gi.y(), gi.z(), false))
+                wall_cells++;
+        }
+        ROS_WARN("[DIAG] direct line: %d steps, %d wall cells", nsteps, wall_cells);
+    }
+
     /* 二次规划（路径裁减） */
     optimized_path = astar_path_finder->smoothTopoPath(origin_path);  // 剪枝优化topo路径
+    ROS_WARN("[DIAG] optimized_path (smoothTopoPath) size: %zu", optimized_path.size());
+    for (size_t k = 0; k < optimized_path.size(); k++) {
+        ROS_WARN("[DIAG]   opt[%zu]: (%.3f, %.3f, %.3f)", k,
+                 optimized_path[k].x(), optimized_path[k].y(), optimized_path[k].z());
+    }
     std::cout<<"optimized_path size: "<<optimized_path.size()<<std::endl;
     global_map->resetUsedGrids();
 
@@ -291,6 +327,8 @@ bool planner_manager::pathFinding(const Eigen::Vector3d start_pt, const Eigen::V
     ROS_WARN("[Manager] reference_speed: (%.2f)", reference_speed);
 
     path_smoother->init(optimized_path, start_vel, reference_speed);
+    // (Fix 53c) Store MINCO input sample points for visualization
+    minco_input_pts = path_smoother->getSamplePath();
     path_smoother->smoothPath();
     path_smoother->pathResample();
     final_path = path_smoother->getPath();

@@ -1,4 +1,8 @@
+> **⚠️ HISTORICAL** — ✅ Fix deployed.  The dual-IMU mismatch that caused this is eliminated on the current single-MID360 platform.
+
 # Problem Report: Localization Tilt towards (1, -1, 0)
+
+> **See also:** [LOCALIZATION_FIX_REPORT.md](LOCALIZATION_FIX_REPORT.md) for the globalmap/init-pose fixes. [UPSIDE_DOWN_POINTCLOUD_FIX_REPORT.md](UPSIDE_DOWN_POINTCLOUD_FIX_REPORT.md) for the comprehensive upside-down fix.
 
 > **Status:** ✅ Fix deployed (Fix 32 + Fix 33c in PLANNING_FIX_HISTORY.md)
 > Fix 32: IMU alignment (imu_filter_3 + switch to _3_filtered)

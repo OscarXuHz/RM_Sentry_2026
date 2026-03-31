@@ -32,6 +32,13 @@ class GlobalMap
 public:
     uint8_t *data;	 // data存放地图的障碍物信息（data[i]为1说明i这个栅格是障碍物栅格）
     uint8_t *l_data; // l_data存放局部地图的障碍物信息（l_data[i]为1说明i这个栅格是障碍物栅格）
+    // Fix 61a: Precomputed dilated static map for fast near-static classification.
+    // near_static_data[x*GLY_SIZE+y] == 1 if ANY cell within ±NEAR_STATIC_RADIUS
+    // of (x,y) has data[]==1. Computed once after static map is loaded.
+    // Eliminates the O(169) inner loop in linearation's searchWindow.
+    uint8_t *near_static_data;
+    static const int NEAR_STATIC_RADIUS = 12;  // covers both STATIC_NBR(6) and STATIC_CHECK_RADIUS(12)
+    void computeNearStaticMap();
 
 
     Eigen::Vector4d top_fly_slope_area;   // 1

@@ -32,6 +32,8 @@ public:
     ros::Publisher reference_path_vis_pub, final_path_vis_pub, target_position_vis_pub, final_line_strip_pub;
     ros::Publisher topo_position_guard_vis_pub, topo_position_connection_vis_pub, topo_line_vis_pub;
     ros::Publisher topo_path_point_vis_pub, topo_path_vis_pub, attack_target_vis_pub;
+    // (Fix 53c) Pipeline stage visualization for debugging
+    ros::Publisher minco_input_vis_pub, minco_output_vis_pub, reference_line_vis_pub;
 
     void init(ros::NodeHandle &nh);
 
@@ -54,6 +56,11 @@ public:
     void visTopoPointConnection(std::vector<GraphNode::Ptr> global_graph);
 
     void visTopoPath(std::vector<std::vector<Eigen::Vector3d>> path);
+
+    // (Fix 53c) Pipeline visualization helpers
+    void visMincoInput(const std::vector<Eigen::Vector2d>& pts);
+    void visMincoOutput(const std::vector<Eigen::Vector2d>& pts);
+    void visReferenceLine(const std::vector<Eigen::Vector3d>& pts);
 
 };
 

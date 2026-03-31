@@ -9,7 +9,7 @@
   <node pkg="bot_sim" type="threeD_lidar_filter_pointcloud" name="threeD_lidar_filter_pointcloud" output="screen">
       <param name="base_frame" type="string" value="gimbal_frame" />
       <param name="laser_frame" type="string" value="aft_mapped" />
-      <param name="scan_topic" type="string" value="/livox/lidar_192_168_1_105" />
+      <param name="scan_topic" type="string" value="/livox/lidar" />
       <param name="new_scan_topic" type="string" value="/filted_topic_3d" />
       <param name="first_RADIUS" type="double" value="0.35" />
       <param name="second_RADIUS" type="double" value="0.35" />

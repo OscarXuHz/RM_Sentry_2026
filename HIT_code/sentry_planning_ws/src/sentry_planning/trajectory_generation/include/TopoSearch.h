@@ -101,6 +101,9 @@ public:
     void setSearchDirection(GraphNode::Ptr g1, GraphNode::Ptr g2, Eigen::Vector3d pt, int &node_id, int direction);
 
     void checkHeightFeasible(GraphNode::Ptr g1, GraphNode::Ptr g2, Eigen::Vector3d pt, int &node_id);
+
+    // (Fix 49a) Check if candidate point is too close to any existing guard
+    bool tooCloseToExistingGuard(const Eigen::Vector3d& pt, double min_spacing) const;
 };
 
 

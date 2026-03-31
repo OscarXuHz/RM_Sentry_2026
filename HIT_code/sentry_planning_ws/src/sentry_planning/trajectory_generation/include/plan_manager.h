@@ -114,6 +114,7 @@ public:
     std::vector<Eigen::Vector3d> astar_path;
     std::vector<Eigen::Vector2d> final_path;
     std::vector<Eigen::Vector2d> final_path_temp;  // 临时可视化变量
+    std::vector<Eigen::Vector2d> minco_input_pts;  // (Fix 53c) MINCO input sample points for vis
     std::vector<GraphNode::Ptr> global_graph;
 
     /*决策相关变量*/

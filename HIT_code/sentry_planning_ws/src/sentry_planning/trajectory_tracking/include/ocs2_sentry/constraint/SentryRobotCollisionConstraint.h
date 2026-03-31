@@ -35,8 +35,12 @@ class SentryCollisionConstraint final : public ocs2::StateConstraint {
     std::shared_ptr<ObsConstraintSet> obsConstraintPtr_;
 
 private:
-    ocs2::scalar_t distance_threshold_ = 0.25;        // Fix 40c: was 0.16 (0.4m); now 0.5m effective clearance from inflated obstacle center
-    ocs2::scalar_t distance_threshold_dynamic_ = 0.49; // Fix 40c: was 0.36 (0.6m); now 0.7m effective clearance for moving objects
+    // Fix 46f: Reduced thresholds for narrow-corridor topo map.
+    // Fix 44c values (0.36/0.64) combined with 0.3m map inflation required
+    // 0.9m/1.1m clearance from actual walls — impossible in narrow corridors.
+    // New values give 0.5m/0.7m total clearance (inflation + constraint).
+    ocs2::scalar_t distance_threshold_ = 0.04;        // static: 0.2m effective, 0.5m total
+    ocs2::scalar_t distance_threshold_dynamic_ = 0.16; // dynamic: 0.4m effective, 0.7m total
 
 };
 

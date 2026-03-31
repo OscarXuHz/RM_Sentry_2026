@@ -295,6 +295,10 @@ void ReplanFSM::execFSMCallback(const ros::TimerEvent &e)
     vislization->visCurPosition(robot_cur_position);
     vislization->visTopoPointGuard(plannerManager->topo_prm->m_graph);
     vislization->visTopoPointConnection(plannerManager->topo_prm->m_graph);
+    // (Fix 53c) Pipeline stage visualization: MINCO input/output, reference line
+    vislization->visMincoInput(plannerManager->minco_input_pts);
+    vislization->visMincoOutput(plannerManager->final_path);
+    vislization->visReferenceLine(plannerManager->ref_trajectory);
 
     ros::Time t1, t2;  /// 计算时间
     t1 = ros::Time::now();

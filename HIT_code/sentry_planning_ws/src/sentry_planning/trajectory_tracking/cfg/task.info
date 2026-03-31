@@ -3,7 +3,7 @@ sqp
 {
   nThreads                              2
   dt                                    0.1
-  sqpIteration                          12   ; Fix 42e: 10→12; more iterations for better convergence with barrier constraints
+  sqpIteration                          8    ; Fix 61e: 12→8; reduced to cut solve time; 8 iterations sufficient with precomputed obstacle map
   inequalityConstraintMu                0.1
   inequalityConstraintDelta             0.2
   useFeedbackPolicy                     true

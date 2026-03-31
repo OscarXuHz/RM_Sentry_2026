@@ -45,7 +45,7 @@ public:
 
 	Eigen::Vector3d coordRounding(const Eigen::Vector3d &coord);
 
-    bool lineVisib(const Eigen::Vector3d& p1, const Eigen::Vector3d& p2, Eigen::Vector3d& colli_pt, double thresh);
+    bool lineVisib(const Eigen::Vector3d& p1, const Eigen::Vector3d& p2, Eigen::Vector3d& colli_pt, double thresh, int cell_margin = 0);
 	Eigen::Vector3i goalIdx;
 };
 

@@ -234,10 +234,8 @@ int main (int argc, char **argv)
         for (int i = 0; i < scan_record_left.points.size(); i++)
         {
             double x = scan_record_left.points[i].x - 0.011;
-            double y = -scan_record_left.points[i].y - 0.02329;
-            double z = -scan_record_left.points[i].z + 0.04412;
-            // double y = scan_record_left.points[i].y + 0.02329;
-            // double z = scan_record_left.points[i].z - 0.04412;
+            double y = scan_record_left.points[i].y + 0.02329;
+            double z = scan_record_left.points[i].z - 0.04412;
             double intensity = scan_record_left.points[i].reflectivity;
             if (!std::isfinite(x) || !std::isfinite(y) || !std::isfinite(z) || !std::isfinite(intensity))
             {
@@ -253,10 +251,8 @@ int main (int argc, char **argv)
         for (int i = 0; i < scan_record_right.points.size(); i++)
         {
             double x = scan_record_right.points[i].x - 0.011;
-            double y = -scan_record_right.points[i].y - 0.02329;
-            double z = -scan_record_right.points[i].z + 0.04412;
-            // double y = scan_record_right.points[i].y + 0.02329;
-            // double z = scan_record_right.points[i].z - 0.04412;
+            double y = scan_record_right.points[i].y + 0.02329;
+            double z = scan_record_right.points[i].z - 0.04412;
             double intensity = scan_record_right.points[i].reflectivity;
             if (!std::isfinite(x) || !std::isfinite(y) || !std::isfinite(z) || !std::isfinite(intensity))
             {
@@ -274,16 +270,14 @@ int main (int argc, char **argv)
         for (int i = 0; i < scan_record_left.points.size(); i++)
         {
             double x = scan_record_left.points[i].x - 0.011;
-            double y = -scan_record_left.points[i].y - 0.02329;
-            double z = -scan_record_left.points[i].z + 0.04412;
-            // double y = scan_record_left.points[i].y + 0.02329;
-            // double z = scan_record_left.points[i].z - 0.04412;
+            double y = scan_record_left.points[i].y + 0.02329;
+            double z = scan_record_left.points[i].z - 0.04412;
             double intensity = scan_record_left.points[i].reflectivity;
             if (!std::isfinite(x) || !std::isfinite(y) || !std::isfinite(z) || !std::isfinite(intensity))
             {
                 continue;
             }
-            if (ispoint(x,y,-z,intensity))
+            if (ispoint(x,y,z,intensity))
             {
                 pcl::PointXYZI point;
                 point.x = x;
@@ -296,16 +290,14 @@ int main (int argc, char **argv)
         for (int i = 0; i < scan_record_right.points.size(); i++)
         {
             double x = scan_record_right.points[i].x - 0.011;
-            double y = -scan_record_right.points[i].y - 0.02329;
-            double z = -scan_record_right.points[i].z + 0.04412;
-            // double y = scan_record_right.points[i].y + 0.02329;
-            // double z = scan_record_right.points[i].z - 0.04412;
+            double y = scan_record_right.points[i].y + 0.02329;
+            double z = scan_record_right.points[i].z - 0.04412;
             double intensity = scan_record_right.points[i].reflectivity;
             if (!std::isfinite(x) || !std::isfinite(y) || !std::isfinite(z) || !std::isfinite(intensity))
             {
                 continue;
             }
-            if (ispoint(x,y,-z,intensity))
+            if (ispoint(x,y,z,intensity))
             {
                 pcl::PointXYZI point;
                 point.x = x;

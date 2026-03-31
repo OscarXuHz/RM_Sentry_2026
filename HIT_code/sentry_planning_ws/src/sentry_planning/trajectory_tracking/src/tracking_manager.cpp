@@ -1,6 +1,7 @@
 #include "../include/tracking_manager.h"
 #include "../include/RM_GridMap.h"
 #include <numeric>
+#include <cmath>
 //#include "../include/visualization_utils.h"
 
 
@@ -78,7 +79,7 @@ void tracking_manager::init(ros::NodeHandle &nh)
     vislization_util.reset(new Vislization);
     vislization_util->init(nh);
 
-    planningMode = planningType::FASTMOTION;  // 初始为快速移动模式
+    // (Fix 54a) DISPENSE mode removed — no planningMode to initialize
 }
 
 void tracking_manager::gazeboVelAccSmooth(double speed, double dt)  // 对gazebo的速度加速度进行kalman平滑处理
@@ -257,7 +258,6 @@ void tracking_manager::rcvLidarIMUPosCallback(const nav_msgs::OdometryConstPtr &
     double w = pose.orientation.w;
     double siny_cosp = +2.0 * (w * z + x * y);
     double cosy_cosp = +1.0 - 2.0 * (y * y + z * z);
-    double robot_add_yaw = 0.0;  // TODO 这里可能会有点问题，在非陀螺模式下不保证底盘一定在+-180度内，如果出现异常情况的话会疯转
     double robot_lidar_yaw = atan2f(siny_cosp, cosy_cosp);
 
     // Fix 37: Use raw aft_mapped (LiDAR) position — NO chassis offset.
@@ -277,21 +277,78 @@ void tracking_manager::rcvLidarIMUPosCallback(const nav_msgs::OdometryConstPtr &
     double robot_x = pose.position.x;
     double robot_y = pose.position.y;
 
-    double robot_yaw_temp;
-    if (has_wheel_state_) {
-        // Use wheel encoder yaw when available
-        robot_yaw_temp = robot_wheel_yaw;
-    } else {
-        // Fallback: use LiDAR/IMU yaw when no wheel state
-        robot_yaw_temp = robot_lidar_yaw;
-    }
-    int k = robot_yaw_temp / (2 * M_PI);
-    robot_yaw_temp = robot_yaw_temp - k * (2 * M_PI);
+    // Fix 45a: CORRECT FRAME HANDLING FOR VELOCITY HEADING
+    //
+    // SMOKING GUN (Fix 44a was wrong):
+    //   /odom_local has child_frame_id="aft_mapped" — the twist is in the
+    //   GIMBAL/LIDAR BODY FRAME, not the world/map frame.
+    //   Fix 44a used atan2(twist.vy, twist.vx) directly as world-frame
+    //   velocity heading.  This was actually the BODY-FRAME heading →
+    //   the MPC φ state was in the wrong frame → predicted path followed
+    //   gimbal direction → divergence from world-frame reference.
+    //
+    // FIX: Rotate body-frame twist to world frame using gimbal yaw,
+    //   THEN compute velocity heading in world frame.
+    double body_vx = twist.linear.x;  // forward in gimbal frame
+    double body_vy = twist.linear.y;  // left in gimbal frame
+    double cos_yaw = std::cos(robot_lidar_yaw);
+    double sin_yaw = std::sin(robot_lidar_yaw);
+    double world_vx = body_vx * cos_yaw - body_vy * sin_yaw;
+    double world_vy = body_vx * sin_yaw + body_vy * cos_yaw;
+    double odom_speed = std::hypot(world_vx, world_vy);
 
-    int j = robot_yaw_temp / M_PI;
-    robot_yaw_temp = robot_yaw_temp - j * (2 * M_PI);
-    robot_cur_yaw = robot_yaw_temp;
-    robot_add_yaw = (k+j)*(2*M_PI);
+    // Fix 45c: Lowered threshold from 0.15 → 0.03 m/s.
+    // At 0.15 the heading locks too easily when the robot is slowly
+    // moving, causing 100°+ phi mismatch → MPC oscillation.
+    // At 0.03 the velocity direction is still meaningful (not noise).
+    // Fallback: when truly stationary, use direction toward target
+    // so the MPC starts with a reasonable heading.
+    double raw_heading;
+    if (odom_speed > 0.03) {
+        raw_heading = std::atan2(world_vy, world_vx);
+    } else {
+        // Truly stationary — use direction to target if available,
+        // otherwise hold previous heading.
+        if (velocity_heading_init_ && localplanner &&
+            localplanner->target_point.norm() > 0.1) {
+            double dx = localplanner->target_point(0) - robot_x;
+            double dy = localplanner->target_point(1) - robot_y;
+            if (std::hypot(dx, dy) > 0.3) {
+                raw_heading = std::atan2(dy, dx);
+            } else {
+                raw_heading = velocity_heading_;
+            }
+        } else {
+            // Fix 46b: Never use gimbal yaw as initial velocity heading.
+            // Gimbal yaw caused MPC to think the robot was heading in the
+            // gimbal direction when starting from rest, contaminating the
+            // predicted path.  Use 0 as neutral placeholder; Fix 46a will
+            // override with ref_phi once a trajectory is available.
+            raw_heading = velocity_heading_init_ ? velocity_heading_ : 0.0;
+        }
+    }
+
+    if (!velocity_heading_init_) {
+        velocity_heading_ = raw_heading;
+        velocity_heading_init_ = true;
+    } else {
+        double delta = std::remainder(raw_heading - velocity_heading_, 2.0 * M_PI);
+        velocity_heading_ += delta;
+        // Fix 45d: Wrap to [-π,π] so MPC φ matches reference frame
+        velocity_heading_ = std::remainder(velocity_heading_, 2.0 * M_PI);
+    }
+
+    robot_cur_yaw = velocity_heading_;
+
+    // Fix 46c: Enhanced periodic debug output
+    {
+        static int dbg_counter = 0;
+        if (++dbg_counter % 50 == 0) {
+            ROS_INFO("[Fix46] velHead=%.3f lidarYaw=%.3f odomSpd=%.3f bodyV=[%.3f,%.3f] worldV=[%.3f,%.3f]",
+                     velocity_heading_, robot_lidar_yaw, odom_speed,
+                     body_vx, body_vy, world_vx, world_vy);
+        }
+    }
 
     double v_ctrl = 0.0;
     double phi_ctrl = 0.0;
@@ -299,16 +356,10 @@ void tracking_manager::rcvLidarIMUPosCallback(const nav_msgs::OdometryConstPtr &
     double angular_ctrl = 0.0;
     Eigen::Vector4d predict_input = Eigen::Vector4d::Zero();  // init to zero to avoid garbage if solver fails
 
-    double line_speed_temp = sqrt(pow(abs(twist.linear.x), 2) + pow(abs(twist.linear.y), 2));
-    if (has_wheel_state_) {
-        // Use wheel encoder speed
-        robot_cur_speed(0) = robot_wheel_speed * cos(robot_cur_yaw);
-        robot_cur_speed(1) = robot_wheel_speed * sin(robot_cur_yaw);
-    } else {
-        // Fallback: derive speed from odom twist (LiDAR/IMU odometry)
-        robot_cur_speed(0) = twist.linear.x;
-        robot_cur_speed(1) = twist.linear.y;
-    }
+    double line_speed_temp = odom_speed;  // already computed from world-frame velocity
+    // Fix 45a: Use world-frame velocities (rotated from body frame above).
+    robot_cur_speed(0) = world_vx;
+    robot_cur_speed(1) = world_vy;
 
     //  判断一下是不是需要加入抵达终点的判断来set速度为0
     double line_speed = sqrt(pow(abs(robot_cur_speed(0)), 2) + pow(abs(robot_cur_speed(1)), 2));
@@ -342,6 +393,17 @@ void tracking_manager::rcvLidarIMUPosCallback(const nav_msgs::OdometryConstPtr &
         in_bridge = false;
         publishSentryOptimalSpeed(MPC_Control);
 
+        // Fix 44d: Still publish replan_flag=false while at goal.
+        // Previously, arrival_goal early-return skipped checkReplanFlag()
+        // entirely → /replan_flag topic went silent → trajectory_generation
+        // didn't know tracking was alive.  Publishing false keeps the topic
+        // alive and allows external monitoring.
+        {
+            std_msgs::Bool replan_flag;
+            replan_flag.data = false;
+            global_replan_pub.publish(replan_flag);
+        }
+
         return;
     }
 
@@ -357,9 +419,31 @@ void tracking_manager::rcvLidarIMUPosCallback(const nav_msgs::OdometryConstPtr &
 
     localplanner->getFightTrackingTraj(robot_cur_position, cost_time, robot_cur_yaw);  // 可以倒车模式，更加灵活,团战模式全部适合倒车
 
+    // Fix 46a: Override MPC observation φ with reference direction when slow.
+    // For an omnidirectional robot, velocity heading is undefined when
+    // nearly stationary.  The unicycle MPC model constrains dx/dt = v*cos(φ),
+    // so if the observation φ points in the gimbal direction (≠ reference),
+    // the predicted path curves from gimbal direction toward the reference
+    // — exactly the artifact the user reports.
+    // Fix: when speed < 0.3 m/s and a reference is available, set the
+    // observation φ to the reference trajectory direction.  The robot IS
+    // omnidirectional and CAN move in any direction instantly, so this is
+    // physically accurate.  Also update velocity_heading_ so the next
+    // frame's fallback is consistent.
+    if (line_speed < 0.3 && !localplanner->ref_phi.empty()) {
+        double ref_dir = localplanner->ref_phi[0];
+        sentry_state(3) = ref_dir;
+        velocity_heading_ = ref_dir;
+        velocity_heading_init_ = true;
+        static int fix46_log = 0;
+        if (++fix46_log % 50 == 0) {
+            ROS_INFO("[Fix46] LOW SPEED override: obs_phi=ref_phi=%.3f (was velHead=%.3f) spd=%.3f",
+                     ref_dir, robot_cur_yaw, line_speed);
+        }
+    }
 
     if(localplanner->reference_path.size() > 2){
-        checkMotionNormal(line_speed_temp);
+        // (Fix 54a) checkMotionNormal removed — no more DISPENSE stuck detection
         int ret = localplanner->solveNMPC(sentry_state);
         std_msgs::Bool solver_status_msg;
         if (ret == 0) {
@@ -390,10 +474,16 @@ void tracking_manager::rcvLidarIMUPosCallback(const nav_msgs::OdometryConstPtr &
             replan_check_flag.pop_back();
         }
         }
+    } else if (!arrival_goal) {
+        // (Fix 54b) reference_path too short but not at goal → request replan
+        // instead of falling through to publish zero velocity.
+        ROS_WARN("[Fix54b] reference_path.size()=%zu <= 2, requesting replan",
+                 localplanner->reference_path.size());
+        replan_now = true;
+        checkReplanFlag();
+        return;  // Do NOT publish zero cmd_vel
     }
-    for(int i = 0; i < (int)state_deque.size() / 2; i++){
-        std::cout<<state_deque[i].z()<<std::endl;
-    }
+    // Fix 61d: Removed cout spam (10+ stdout flushes per callback at 10Hz)
     checkReplanFlag();
 
 
@@ -402,25 +492,63 @@ void tracking_manager::rcvLidarIMUPosCallback(const nav_msgs::OdometryConstPtr &
     acc_ctrl = predict_input(2);
     angular_ctrl = predict_input(3);
 
-    if(planningMode == planningType::DISPENSE){  // 摆脱模式处理
-        double reverse_time = (ros::Time::now() - dispense_time).toSec();
-        if(reverse_time > 0.5){
-            replan_now = true;
+    // Fix 56: OMNIDIRECTIONAL FIX — Do NOT clamp v_ctrl to zero.
+    // The robot is omnidirectional.  The MPC unicycle model allows negative v
+    // to represent motion opposite to phi.  For the omni robot, this is
+    // equivalent to positive v with phi flipped by π.
+    //
+    // Previous Fix 45c clamped v_ctrl >= 0, which KILLED velocity whenever
+    // the MPC wanted to move in the phi+π direction.  This was the #1 cause
+    // of cmd_vel going to zero (56% of frames observed).
+    //
+    // Now: if v_ctrl < 0, flip the direction (v_ctrl = -v_ctrl, phi += π).
+    // The world-frame vx/vy stays identical: v*cos(phi) == (-v)*cos(phi+π).
+    if (v_ctrl < 0.0) {
+        static int flip_log = 0;
+        if (++flip_log % 50 == 0) {
+            ROS_INFO("[Fix56] v_ctrl=%.4f NEGATIVE → flipping direction (phi %.3f → %.3f)",
+                     v_ctrl, phi_ctrl, phi_ctrl + M_PI);
         }
-        v_ctrl = -0.5 * v_ctrl;  // 卡住你就倒车拐弯
+        v_ctrl = -v_ctrl;
+        phi_ctrl += M_PI;
+    }
+
+    // Fix 56b: Cap v_ctrl to prevent excessive speed.
+    // No explicit speed limit existed anywhere in the pipeline.
+    static const double MAX_SPEED = 2.0;  // m/s
+    if (v_ctrl > MAX_SPEED) {
+        v_ctrl = MAX_SPEED;
     }
 
 
     Eigen::Vector4d MPC_Control;
     {
-        // Direct vx/vy mode: decompose v into gimbal-frame vx/vy here,
-        // then pass through hit_bridge unchanged.
-        // delta = desired_heading - gimbal_yaw (both with yaw offset)
-        double delta = (phi_ctrl + robot_add_yaw) - (robot_lidar_yaw + robot_add_yaw);
-        MPC_Control(0) = v_ctrl * std::cos(delta);  // gimbal-frame vx → angle_target field
-        MPC_Control(1) = v_ctrl * std::sin(delta);  // gimbal-frame vy → angle_current field
-        MPC_Control(2) = 0.0;                       // z_angle (angular vel) → line_speed field
+        // Fix 45b: World-frame → gimbal-frame rotation for cmd_vel.
+        //
+        // The MPC solves in the world/map frame, producing world-frame vx/vy.
+        // The MCU expects GIMBAL-FRAME velocities (body frame of the robot).
+        // Rotate using the current gimbal orientation (robot_lidar_yaw).
+        double vx_world = v_ctrl * std::cos(phi_ctrl);
+        double vy_world = v_ctrl * std::sin(phi_ctrl);
+
+        // World → body: R^T * v_world, where R is the rotation matrix
+        //   vx_body =  vx_world * cos(θ) + vy_world * sin(θ)
+        //   vy_body = -vx_world * sin(θ) + vy_world * cos(θ)
+        double cos_g = std::cos(robot_lidar_yaw);
+        double sin_g = std::sin(robot_lidar_yaw);
+        MPC_Control(0) =  vx_world * cos_g + vy_world * sin_g;  // gimbal-frame vx (forward)
+        MPC_Control(1) = -vx_world * sin_g + vy_world * cos_g;  // gimbal-frame vy (left)
+
+        // Debug: log both frames periodically
+        static int cmd_dbg = 0;
+        if (++cmd_dbg % 50 == 0) {
+            ROS_INFO("[Fix46] cmd: worldV=[%.3f,%.3f] gimbalV=[%.3f,%.3f] lidarYaw=%.3f phi=%.3f v=%.3f refPhi0=%.3f",
+                     vx_world, vy_world, MPC_Control(0), MPC_Control(1),
+                     robot_lidar_yaw, phi_ctrl, v_ctrl,
+                     localplanner->ref_phi.empty() ? -99.0 : localplanner->ref_phi[0]);
+        }
     }
+    MPC_Control(2) = 0.0;  // unused
     MPC_Control(3) = checkMotionMode();
 
     in_bridge = localplanner->checkBridge();
@@ -508,9 +636,9 @@ void tracking_manager::rcvGazeboRealPosCallback(const gazebo_msgs::ModelStatesCo
         optimal_differential_speed = getDifferentialModelSpeed(v_ctrl, angular_ctrl, robot_wheel_tread);
         publishMbotOptimalSpeed(optimal_differential_speed);
 
-        MPC_Control(0) = v_ctrl;
-        MPC_Control(1) = phi_ctrl;
-        MPC_Control(2) = angular_ctrl;
+        MPC_Control(0) = 0.0;  // world-frame vx (stopped)
+        MPC_Control(1) = 0.0;  // world-frame vy (stopped)
+        MPC_Control(2) = 0.0;
         MPC_Control(3) = checkMotionMode();
 //        MPC_Control(3) = 1;
         in_bridge = false;
@@ -528,7 +656,7 @@ void tracking_manager::rcvGazeboRealPosCallback(const gazebo_msgs::ModelStatesCo
 
 
     if(localplanner->reference_path.size() > 2){
-        checkMotionNormal(line_speed);
+        // (Fix 54a) checkMotionNormal removed — no more DISPENSE stuck detection
 
         int ret = localplanner->solveNMPC(sentry_state);
         std_msgs::Bool solver_status_msg;
@@ -557,6 +685,13 @@ void tracking_manager::rcvGazeboRealPosCallback(const gazebo_msgs::ModelStatesCo
             replan_check_flag.pop_back();
         }
         }
+    } else if (!arrival_goal) {
+        // (Fix 54b) reference_path too short but not at goal → request replan
+        ROS_WARN("[Fix54b] reference_path.size()=%zu <= 2, requesting replan (Gazebo)",
+                 localplanner->reference_path.size());
+        replan_now = true;
+        checkReplanFlag();
+        return;  // Do NOT publish zero cmd_vel
     }
     checkReplanFlag();
 
@@ -569,26 +704,16 @@ void tracking_manager::rcvGazeboRealPosCallback(const gazebo_msgs::ModelStatesCo
     Eigen::Vector2d optimal_differential_speed;
     Eigen::Vector4d MPC_Control;
 
-    if(planningMode == planningType::DISPENSE){
-        double reverse_time = (ros::Time::now() - dispense_time).toSec();
-        if(reverse_time > 0.6){
-            replan_now = true;
-        }
-        v_ctrl = -0.5 * v_ctrl;  // 卡住你就倒车拐弯
-    }
+    // (Fix 54a) DISPENSE velocity reversal removed from Gazebo path
 
     optimal_differential_speed = getDifferentialModelSpeed(v_ctrl, angular_ctrl, robot_wheel_tread);
     publishMbotOptimalSpeed(optimal_differential_speed);
 
-    MPC_Control(0) = v_ctrl;
-    MPC_Control(1) = phi_ctrl;
-    MPC_Control(2) = angular_ctrl;
+    // World-frame vx/vy (Gazebo path: robot_cur_yaw has no wrapping offset)
+    MPC_Control(0) = v_ctrl * std::cos(phi_ctrl);  // world-frame vx
+    MPC_Control(1) = v_ctrl * std::sin(phi_ctrl);  // world-frame vy
+    MPC_Control(2) = 0.0;
     MPC_Control(3) = checkMotionMode();
-//    if(isxtl && localplanner->checkXtl()){
-//        MPC_Control(3) = checkMotionMode();
-//    }else{
-//        MPC_Control(3) = 0;
-//    }
     in_bridge = localplanner->checkBridge();
     publishSentryOptimalSpeed(MPC_Control);
 }
@@ -617,8 +742,8 @@ int tracking_manager::checkMotionMode(){
         if(arrival_goal){
             xtl_mode = 2;
         }
-        else if(time > 0.5 && !localplanner->checkBridge() && planningMode != planningType::DISPENSE){
-           //  time > 2.0 &&
+        else if(time > 0.5 && !localplanner->checkBridge()){
+           //  (Fix 54a) Removed DISPENSE check — no more planningMode
            xtl_mode = 0;  // 轨迹够长且不在桥洞里，在桥洞里不准转弯
         }else{
             xtl_mode = 1;
@@ -654,6 +779,7 @@ void tracking_manager::checkReplanFlag(){
         replan_check_flag.clear();
         localplanner->m_get_global_trajectory = false;
         last_traj_time = ros::Time::now();
+        replan_now = false;  // (Fix 54a) Reset replan_now when new trajectory arrives
     }
     int num_collision_error = accumulate(replan_check_flag.begin(), replan_check_flag.end(), 0);
     int num_tracking_low = accumulate(localplanner->tracking_low_check_flag.begin(), localplanner->tracking_low_check_flag.end(), 0);
@@ -672,7 +798,13 @@ void tracking_manager::checkReplanFlag(){
         ROS_INFO("[Fix 38b] Periodic replan triggered (%.1fs since last trajectory)", PERIODIC_REPLAN_SEC);
     }
 
-    if(num_collision_error > 25 || num_tracking_low > 4 || replan_now || periodic_replan){
+    if(num_collision_error > 40 || num_tracking_low > 4 || replan_now || periodic_replan){
+        // Fix 60: Increased collision threshold from 25→40.
+        // At ~10Hz, 25 frames = 2.5s worth of detections.  With Fix 56/57
+        // eliminating the v_ctrl→0 cascade, fewer false collisions will
+        // accumulate, but raising the threshold adds more tolerance for
+        // transient lidar noise and localization drift.
+        //
         // Fix 42c: Break the perpetual replan cycle.
         // When MPC path goes through obstacles, checkfeasible() fires every
         // frame → num_collision_error hits 25 in ~0.6s → replan → new
@@ -694,7 +826,7 @@ void tracking_manager::checkReplanFlag(){
             return;
         }
         ROS_ERROR("need to replan now !!");
-        planningMode = planningType::FASTMOTION;
+        // (Fix 54a) planningMode = FASTMOTION removed — no more DISPENSE mode
         replan_flag.data = true;
     }
     else{
@@ -703,40 +835,10 @@ void tracking_manager::checkReplanFlag(){
     global_replan_pub.publish(replan_flag);
 }
 
-void tracking_manager::checkMotionNormal(double line_speed)
-{
-    /**
-     * @brief 检查tracking是否正常，是否被卡住需要摆脱
-     */
-     if(localplanner->m_get_global_trajectory){
-         planningMode = planningType::FASTMOTION;
-         replan_now = false;
-         start_checking_time = ros::Time::now();
-         speed_check.clear();
-     }
-    speed_check.insert(speed_check.begin(), line_speed);
-    double tracking_time = (ros::Time::now() - start_checking_time).toSec();
-    double max_speed = 1.0;
-    // Fix 35d: Tightened DISPENSE stuck-detection thresholds.
-    // Old: tracking_time > 1.2, max_speed < 0.3, average_speed < 0.1
-    // These triggered during MPC oscillation (sign-flipping speeds near zero)
-    // and made DISPENSE reverse v_ctrl, causing a vicious feedback loop.
-    // New: require 2.0s of truly stuck motion (max < 0.15, avg < 0.05).
-    if(tracking_time > 2.0){
-        speed_check.pop_back();
-        max_speed = *max_element(speed_check.begin(), speed_check.end());
-        double average_speed = std::accumulate(speed_check.begin(), speed_check.end(), 0.0) / speed_check.size();
-        if(max_speed < 0.15 && !arrival_goal && average_speed < 0.05){
-//            ROS_ERROR("dispense form now!");
-            if(planningMode != planningType::DISPENSE){
-                ROS_ERROR("get dispense time");
-                dispense_time = ros::Time::now();  // 进入摆脱模式时进行计时
-            }
-            planningMode = planningType::DISPENSE;
-        }
-
-    }
-}
+// (Fix 54a) checkMotionNormal() removed entirely.
+// DISPENSE mode was the only consumer. Stuck detection is now replaced by
+// simple replan-on-stuck: if speed stays near zero for 3s, request replan
+// via the existing checkReplanFlag() mechanism (periodic 5s replan + collision-based).
 
 
 void tracking_manager::publishMbotOptimalSpeed(Eigen::Vector2d &speed)

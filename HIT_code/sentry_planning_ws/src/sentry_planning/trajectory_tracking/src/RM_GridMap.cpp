@@ -82,6 +82,7 @@ void GlobalMap::initGridMap(ros::NodeHandle &nh, cv::Mat occ_map, std::string be
     processSecondHeights();
 
     occMaptoObstacle(occ_map);
+    computeNearStaticMap();  // Fix 61a: precompute dilated static map
     m_local_cloud.reset(new pcl::PointCloud <pcl::PointXYZ>);
 }
 
@@ -530,4 +531,32 @@ bool GlobalMap::isFree(const int &idx_x, const int &idx_y, const int &idx_z) con
 {
     return (idx_x >= 0 && idx_x < GLX_SIZE && idx_y >= 0 && idx_y < GLY_SIZE && idx_z >= 0 && idx_z < GLZ_SIZE &&
             (data[idx_x * GLY_SIZE + idx_y] < 1 && l_data[idx_x * GLY_SIZE + idx_y] == 0));
+}
+
+// Fix 61a: Precompute dilated static occupancy map.
+// For every static-occupied cell, mark all cells within ±NEAR_STATIC_RADIUS
+// as "near static".  This turns the O(169) inner loop in linearation's
+// searchWindow and the O(625) loop in checkfeasible into single array lookups,
+// eliminating ~640k grid reads per MPC callback.
+void GlobalMap::computeNearStaticMap() {
+    near_static_data = new uint8_t[GLXY_SIZE];
+    memset(near_static_data, 0, GLXY_SIZE * sizeof(uint8_t));
+    int count = 0;
+    for (int x = 0; x < GLX_SIZE; x++) {
+        for (int y = 0; y < GLY_SIZE; y++) {
+            if (data[x * GLY_SIZE + y] == 1) {
+                count++;
+                int x_lo = std::max(0, x - NEAR_STATIC_RADIUS);
+                int x_hi = std::min(GLX_SIZE - 1, x + NEAR_STATIC_RADIUS);
+                int y_lo = std::max(0, y - NEAR_STATIC_RADIUS);
+                int y_hi = std::min(GLY_SIZE - 1, y + NEAR_STATIC_RADIUS);
+                for (int nx = x_lo; nx <= x_hi; nx++) {
+                    for (int ny = y_lo; ny <= y_hi; ny++) {
+                        near_static_data[nx * GLY_SIZE + ny] = 1;
+                    }
+                }
+            }
+        }
+    }
+    ROS_INFO("[Fix61a] computeNearStaticMap: %d static cells dilated with radius %d", count, NEAR_STATIC_RADIUS);
 }

@@ -1,7 +1,11 @@
+> **⚠️ HISTORICAL** — References the old dual-LiDAR robot (`_105` + `_3`).  Current system uses a single MID-360.  Fix principles were carried forward but specific code paths are superseded.
+
 # Obstacle Avoidance Fix Report
 
 **Date:** 2025-01  
 **Scope:** Global planner (trajectory_generation) + Local planner (trajectory_tracking / MPC)
+
+> **See also:** [PROBLEM_REPORT_CMD_VEL_FLUCTUATION.md](PROBLEM_REPORT_CMD_VEL_FLUCTUATION.md) for the cmd_vel oscillation root cause analysis.
 
 ---
 
